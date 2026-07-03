@@ -6,7 +6,27 @@ chains of latent association:
 
 > chair → throne → witness → ruin → monument
 
-All frames are processed locally in the browser. No backend, no API keys.
+All frames are processed locally in the browser. Works fully offline with a
+curated local dictionary; optionally connects to an LLM for generated chains
+(see AI mode below).
+
+## AI mode (optional, one env var)
+
+The repo includes `api/latent-chain.ts` — a single Vercel serverless function
+that generates chains and poems with the Anthropic API (Claude Haiku).
+
+1. Deploy the repo to Vercel
+2. In the Vercel project settings, add the environment variable
+   `ANTHROPIC_API_KEY` (get one at https://console.anthropic.com)
+3. Done — the frontend probes `/api/latent-chain` automatically. When it's
+   live, the HUD shows `· ai drift`; when it's absent or fails, the local
+   dictionary takes over with no error.
+
+Privacy holds either way: only the detected **label text** (e.g. "chair") and
+other visible labels are sent — camera frames never leave the device.
+Responses are cached per label in localStorage to keep token usage tiny.
+Model string is set in `api/latent-chain.ts`; check https://docs.claude.com
+for current models if it's ever retired.
 
 ## Run
 
@@ -32,6 +52,10 @@ over HTTPS, which the camera requires).
 
 - **Scan** — point the camera; detected objects get glowing brackets and a
   floating latent chain that reveals word by word
+- **Constellation telemetry** — curved threads connect detected objects,
+  fanned filaments reach into a flickering feature-point field sampled from
+  image contrast, and low-confidence detections render as raw echo boxes
+  with coordinate readouts
 - **Drift** — each object's chain mutates to a new variant every 8 seconds
 - **Tap** an object — expanded bottom sheet: label, confidence, full chain,
   poetic fragment, Regenerate, Generate portal, Save discovery
@@ -43,11 +67,15 @@ over HTTPS, which the camera requires).
 
 ```
 index.html          screens: landing / loader / error / scanner / sheet / archive
+api/
+  latent-chain.ts   optional Vercel function → Anthropic API (the whole backend)
 src/
-  main.ts           orchestration, render loop, tap & hold input
+  main.ts           orchestration, render loop, tap & hold input, AI wiring
   camera.ts         rear-camera getUserMedia with typed errors
-  detection.ts      COCO-SSD (code-split), 500 ms loop, IoU object tracking
+  detection.ts      COCO-SSD (code-split), 500 ms loop, IoU tracking, echo boxes
   latentChains.ts   curated chain dictionary, fallbacks, poem templates
+  constellation.ts  feature-point field, connecting threads, telemetry readouts
+  ai.ts             /api/latent-chain client: cache, timeout, silent fallback
   overlays.ts       canvas brackets, chain text, node particles, cover-fit mapping
   portal.ts         chromatic ring + particle bloom layer
   archive.ts        localStorage persistence, frame capture, gallery

@@ -6,6 +6,8 @@
  */
 
 import type { BBox, BBoxMapper, TrackedObject } from './types';
+import { ConstellationLayer } from './constellation';
+import type { Echo } from './detection';
 
 const PHOSPHOR = '#7af4d2';
 const SIGNAL = '#ffb454';
@@ -22,6 +24,7 @@ interface Node {
 export class OverlayRenderer {
   private ctx: CanvasRenderingContext2D;
   private nodes = new Map<string, Node[]>();
+  private constellation: ConstellationLayer;
   private dpr = 1;
 
   constructor(
@@ -29,6 +32,7 @@ export class OverlayRenderer {
     private video: HTMLVideoElement
   ) {
     this.ctx = canvas.getContext('2d')!;
+    this.constellation = new ConstellationLayer(video);
   }
 
   /** Keeps the canvas buffer matched to its CSS size × devicePixelRatio. */
@@ -56,13 +60,34 @@ export class OverlayRenderer {
     return ([x, y, w, h]: BBox): BBox => [x * scale + ox, y * scale + oy, w * scale, h * scale];
   }
 
-  render(objects: TrackedObject[], now: number, selectedId: string | null): void {
+  render(objects: TrackedObject[], now: number, selectedId: string | null, echoes: Echo[]): void {
     this.resize();
     const { ctx } = this;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
 
     const map = this.mapper();
+    const viewW = this.canvas.clientWidth;
+    const viewH = this.canvas.clientHeight;
+
+    // Telemetry layer first, so brackets and chains sit on top of it.
+    this.constellation.update(now);
+    const vw = this.video.videoWidth || 1;
+    const vh = this.video.videoHeight || 1;
+    const videoToScreen = (nx: number, ny: number): [number, number] => {
+      const [x, y] = map([nx * vw, ny * vh, 0, 0]);
+      return [x, y];
+    };
+    this.constellation.render(
+      ctx,
+      now,
+      viewW,
+      viewH,
+      videoToScreen,
+      objects.map((o) => map(o.smoothBBox)),
+      echoes.map((e) => ({ rect: map(e.bbox), score: e.score }))
+    );
+
     const liveIds = new Set<string>();
 
     for (const obj of objects) {

@@ -57,16 +57,29 @@ function createTracked(label: string, confidence: number, bbox: BBox): TrackedOb
   };
 }
 
+export interface Echo {
+  bbox: BBox;
+  score: number;
+}
+
 export class Tracker {
   private objects = new Map<string, TrackedObject>();
+  private echoBoxes: Echo[] = [];
   private timer: number | null = null;
   private busy = false;
+  /** Called whenever a new object enters tracking (used for AI enrichment). */
+  onCreate: ((obj: TrackedObject) => void) | null = null;
 
   constructor(private video: HTMLVideoElement) {}
 
   /** All currently tracked objects. */
   list(): TrackedObject[] {
     return [...this.objects.values()];
+  }
+
+  /** Low-confidence detections from the latest pass (telemetry only). */
+  echoes(): Echo[] {
+    return this.echoBoxes;
   }
 
   get(id: string): TrackedObject | undefined {
@@ -104,6 +117,16 @@ export class Tracker {
     }
   }
 
+  /** Injects an AI-generated chain + poem as the object's primary variant. */
+  applyAi(id: string, chain: string[], poem: string): void {
+    const obj = this.objects.get(id);
+    if (!obj) return;
+    obj.chains = [chain, ...obj.chains];
+    obj.chainIndex = 0;
+    obj.chainChangedAt = performance.now();
+    obj.poem = poem;
+  }
+
   /** Re-rolls the chain variant and poem for one object (Regenerate). */
   regenerate(id: string): TrackedObject | undefined {
     const obj = this.objects.get(id);
@@ -122,8 +145,14 @@ export class Tracker {
     if (!model || this.busy || this.video.readyState < 2) return;
     this.busy = true;
     try {
-      const predictions = await model.detect(this.video);
+      // Ask for everything down to 0.15: >0.55 becomes a tracked object,
+      // the rest render as raw telemetry echoes.
+      const predictions = await model.detect(this.video, 24, 0.15);
       const now = performance.now();
+
+      this.echoBoxes = predictions
+        .filter((p) => p.score >= 0.15 && p.score < MIN_CONFIDENCE)
+        .map((p) => ({ bbox: p.bbox as BBox, score: p.score }));
 
       const unmatched = new Set(this.objects.keys());
       for (const p of predictions) {
@@ -152,6 +181,7 @@ export class Tracker {
         } else {
           const created = createTracked(p.class, p.score, bbox);
           this.objects.set(created.id, created);
+          this.onCreate?.(created);
         }
       }
 

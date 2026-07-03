@@ -9,6 +9,7 @@ import { loadModel, Tracker } from './detection';
 import { OverlayRenderer } from './overlays';
 import { PortalLayer } from './portal';
 import { deleteDiscovery, discoveryCount, renderArchive, saveDiscovery } from './archive';
+import { aiStatus, fetchLatentChain } from './ai';
 import type { TrackedObject } from './types';
 
 /* ------------------------------------------------------------------ DOM */
@@ -102,6 +103,19 @@ async function enterLatentSpace(): Promise<void> {
   }
 }
 
+/* --------------------------------------------------- AI enrichment */
+
+// When a new object enters tracking, ask the (optional) backend for a
+// richer chain. Only labels are sent — never frames. Falls back silently.
+tracker.onCreate = (obj) => {
+  const sceneLabels = tracker.list().map((o) => o.label);
+  void fetchLatentChain(obj.label, sceneLabels).then((result) => {
+    if (!result || !tracker.get(obj.id)) return;
+    tracker.applyAi(obj.id, result.chain, result.poem);
+    if (selectedId === obj.id) fillSheet(tracker.get(obj.id)!);
+  });
+};
+
 /* ---------------------------------------------------------- render loop */
 
 function renderLoop(): void {
@@ -116,9 +130,10 @@ function renderLoop(): void {
     closeSheet();
   }
 
-  overlay.render(objects, now, selectedId);
+  overlay.render(objects, now, selectedId, tracker.echoes());
   portal.render(now);
-  hudCount.textContent = `${objects.length} signal${objects.length === 1 ? '' : 's'}`;
+  const mode = aiStatus() === 'on' ? ' · ai drift' : '';
+  hudCount.textContent = `${objects.length} signal${objects.length === 1 ? '' : 's'}${mode}`;
   rafId = requestAnimationFrame(renderLoop);
 }
 
@@ -246,8 +261,18 @@ $('portal-btn').addEventListener('click', () => {
 
 $('regen-btn').addEventListener('click', () => {
   if (!selectedId) return;
-  const obj = tracker.regenerate(selectedId);
+  const id = selectedId;
+  const obj = tracker.regenerate(id); // instant local re-roll
   if (obj) fillSheet(obj);
+  // If the AI endpoint is live, replace with a freshly generated chain.
+  if (obj && aiStatus() === 'on') {
+    const sceneLabels = tracker.list().map((o) => o.label);
+    void fetchLatentChain(obj.label, sceneLabels, true).then((result) => {
+      if (!result || selectedId !== id || !tracker.get(id)) return;
+      tracker.applyAi(id, result.chain, result.poem);
+      fillSheet(tracker.get(id)!);
+    });
+  }
 });
 
 $('save-btn').addEventListener('click', () => {
