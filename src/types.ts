@@ -13,25 +13,25 @@ export interface TrackedObject {
   bbox: BBox;
   /** Smoothed bbox used for rendering, in video coordinates. */
   smoothBBox: BBox;
-  /** All curated chain variants for this label. */
-  chains: string[][];
-  /** Index of the currently displayed chain variant. */
-  chainIndex: number;
-  /** Timestamp (ms) of the last chain drift. */
-  chainChangedAt: number;
-  /** Poetic fragment for this object. */
-  poem: string;
+  /** Current narrative fragment shown for this object. */
+  fragment: string;
+  /** Timestamp (ms) when the fragment last changed (drives typewriter). */
+  fragmentChangedAt: number;
+  /** Which encounter with this label this object was (1st chair, 2nd…). */
+  encounter: number;
   createdAt: number;
   lastSeen: number;
 }
 
-/** A saved discovery persisted to localStorage. */
+/** A logged anomaly persisted to localStorage. */
 export interface Discovery {
   id: string;
   imageDataUrl: string;
-  originalLabel: string;
-  latentChain: string[];
-  poeticText: string;
+  label: string;
+  entityId: string;
+  fragment: string;
+  /** Session-relative stamp, e.g. T+00:03:42. */
+  sessionStamp: string;
   createdAt: string;
 }
 

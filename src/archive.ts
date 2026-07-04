@@ -1,11 +1,12 @@
 /**
- * Discovery archive: capture a camera frame, persist discoveries to
- * localStorage, and render the gallery grid with delete support.
+ * Anomaly log: capture a camera frame, persist logged anomalies to
+ * localStorage, and render the log with delete support.
  */
 
 import type { Discovery, TrackedObject } from './types';
+import { entityId, sessionStamp, noteSave } from './narrative';
 
-const STORAGE_KEY = 'latent-discoveries';
+const STORAGE_KEY = 'simulation-anomaly-log';
 const SNAPSHOT_WIDTH = 640;
 
 export function loadDiscoveries(): Discovery[] {
@@ -22,7 +23,7 @@ function persist(discoveries: Discovery[]): boolean {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(discoveries));
     return true;
   } catch {
-    return false; // quota exceeded or storage unavailable
+    return false;
   }
 }
 
@@ -39,25 +40,28 @@ export function captureFrame(video: HTMLVideoElement): string {
   return c.toDataURL('image/jpeg', 0.72);
 }
 
-/**
- * Saves a discovery for a tracked object. Returns the updated list, or null
- * if storage failed (e.g. quota exceeded).
- */
+/** Logs an anomaly. Returns the updated list, or null if storage failed. */
 export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Discovery[] | null {
   const discovery: Discovery = {
     id: crypto.randomUUID(),
     imageDataUrl: captureFrame(video),
-    originalLabel: obj.label,
-    latentChain: [...obj.chains[obj.chainIndex]],
-    poeticText: obj.poem,
+    label: obj.label,
+    entityId: entityId(obj.id),
+    fragment: obj.fragment,
+    sessionStamp: sessionStamp(),
     createdAt: new Date().toISOString(),
   };
   const all = [discovery, ...loadDiscoveries()];
-  if (persist(all)) return all;
-
-  // Quota fallback: drop the oldest entries and retry once.
+  if (persist(all)) {
+    noteSave();
+    return all;
+  }
   const trimmed = all.slice(0, Math.max(1, all.length - 3));
-  return persist(trimmed) ? trimmed : null;
+  if (persist(trimmed)) {
+    noteSave();
+    return trimmed;
+  }
+  return null;
 }
 
 export function deleteDiscovery(id: string): Discovery[] {
@@ -67,7 +71,7 @@ export function deleteDiscovery(id: string): Discovery[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* Gallery rendering                                                   */
+/* Log rendering                                                       */
 /* ------------------------------------------------------------------ */
 
 const dateFmt = new Intl.DateTimeFormat(undefined, {
@@ -93,19 +97,19 @@ export function renderArchive(
     const img = document.createElement('img');
     img.className = 'discovery__img';
     img.src = d.imageDataUrl;
-    img.alt = `Snapshot of ${d.originalLabel}`;
+    img.alt = `Logged ${d.label}`;
     img.loading = 'lazy';
 
     const body = document.createElement('div');
     body.className = 'discovery__body';
 
-    const chain = document.createElement('p');
-    chain.className = 'discovery__chain';
-    chain.textContent = d.latentChain.join(' → ');
+    const tag = document.createElement('p');
+    tag.className = 'discovery__tag';
+    tag.textContent = `${d.sessionStamp} · ${d.entityId} · ${d.label}`;
 
-    const poem = document.createElement('p');
-    poem.className = 'discovery__poem';
-    poem.textContent = d.poeticText;
+    const fragment = document.createElement('p');
+    fragment.className = 'discovery__fragment';
+    fragment.textContent = d.fragment;
 
     const foot = document.createElement('div');
     foot.className = 'discovery__foot';
@@ -120,7 +124,7 @@ export function renderArchive(
     del.addEventListener('click', () => onDelete(d.id));
 
     foot.append(date, del);
-    body.append(chain, poem, foot);
+    body.append(tag, fragment, foot);
     card.append(img, body);
     grid.append(card);
   }

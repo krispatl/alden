@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@tensorflow-models/coco-ssd": "^2.2.3",
-    "@tensorflow/tfjs": "^4.22.0"
+    "@tensorflow/tfjs": "^4.22.0",
+    "three": "^0.160.1"
   },
   "devDependencies": {
+    "@types/three": "^0.160.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.11"
   }

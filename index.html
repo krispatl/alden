@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#05070c" />
     <meta
       name="description"
-      content="Point your camera at the world. Watch objects drift through latent meaning."
+      content="Point your camera at ordinary objects. Read what the simulation says about them."
     />
     <title>Latent Space Explorer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -25,17 +25,18 @@
     <section id="landing" class="screen screen--visible">
       <div class="landing__grid" aria-hidden="true"></div>
       <div class="landing__inner">
-        <p class="eyebrow">FIELD INSTRUMENT · v0.1</p>
+        <p class="eyebrow">FIELD INSTRUMENT · v0.2</p>
         <h1 class="landing__title">
           LATENT<br />SPACE<br />EXPLORER
         </h1>
         <p class="landing__lede">
-          Point your camera at the world.<br />
-          Watch objects drift through latent meaning.
+          The room you're in is being rendered.<br />
+          Point your camera at ordinary objects<br />
+          and read what the simulation says about them.
         </p>
         <button id="enter-btn" class="btn btn--enter">
           <span class="btn--enter__ring" aria-hidden="true"></span>
-          <span class="btn--enter__label">Enter latent space</span>
+          <span class="btn--enter__label">Begin observation</span>
         </button>
         <p class="landing__privacy">
           Camera frames are processed locally on your device.<br />
@@ -43,7 +44,7 @@
         </p>
       </div>
       <p class="landing__foot" aria-hidden="true">
-        signal acquired · semantic drift enabled · archive ready
+        renderer online · observer slot available · log ready
       </p>
     </section>
 
@@ -68,54 +69,71 @@
     <section id="scanner" class="screen">
       <video id="camera" playsinline muted autoplay></video>
       <canvas id="overlay"></canvas>
-      <canvas id="portal-layer"></canvas>
+      <canvas id="holo-layer"></canvas>
       <div class="scanner__grain" aria-hidden="true"></div>
 
       <header class="hud hud--top">
-        <span class="hud__title">LATENT SPACE EXPLORER</span>
-        <span id="hud-count" class="hud__count">0 signals</span>
+        <div class="hud__left">
+          <span class="hud__title">LATENT SPACE EXPLORER</span>
+          <span id="hud-ticker" class="hud__ticker">entity registry sync…</span>
+        </div>
+        <div class="hud__right">
+          <span id="hud-count" class="hud__count">0 entities</span>
+          <button id="mute-btn" class="btn btn--icon btn--hudicon" aria-label="Toggle sound">◈</button>
+        </div>
       </header>
 
       <footer class="hud hud--bottom">
         <button id="archive-btn" class="btn btn--hud">
-          Archive <span id="archive-count" class="hud__badge">0</span>
+          Anomaly log <span id="archive-count" class="hud__badge">0</span>
         </button>
-        <span class="hud__hint">tap a signal · hold for portal</span>
+        <span class="hud__hint">tap an entity to read · hold to inspect</span>
       </footer>
+
+      <!-- Onboarding cards (first run) -->
+      <div id="onboarding" class="onboard" hidden>
+        <div class="onboard__card">
+          <p class="eyebrow">OBSERVER CALIBRATED</p>
+          <p id="onboard-text" class="onboard__text"></p>
+          <div class="onboard__actions">
+            <button id="onboard-skip" class="btn btn--tiny">Skip</button>
+            <button id="onboard-next" class="btn btn--ghost">Next</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ===================== BOTTOM SHEET ===================== -->
-    <div id="sheet" class="sheet" role="dialog" aria-modal="true" aria-label="Object detail">
+    <div id="sheet" class="sheet" role="dialog" aria-modal="true" aria-label="Entity detail">
       <div class="sheet__handle" aria-hidden="true"></div>
       <div class="sheet__head">
         <div>
           <p id="sheet-label" class="sheet__label">—</p>
-          <p id="sheet-confidence" class="sheet__meta">—</p>
+          <p id="sheet-telemetry" class="sheet__meta">—</p>
         </div>
         <button id="sheet-close" class="btn btn--icon" aria-label="Close">✕</button>
       </div>
-      <div id="sheet-chain" class="sheet__chain"></div>
-      <p id="sheet-poem" class="sheet__poem"></p>
+      <p id="sheet-fragment" class="sheet__fragment"></p>
       <div class="sheet__actions">
-        <button id="portal-btn" class="btn btn--ghost">Generate portal</button>
-        <button id="regen-btn" class="btn btn--ghost">Regenerate</button>
-        <button id="save-btn" class="btn btn--solid">Save discovery</button>
+        <button id="inspect-btn" class="btn btn--ghost">Inspect</button>
+        <button id="regen-btn" class="btn btn--ghost">New reading</button>
+        <button id="save-btn" class="btn btn--solid">Log anomaly</button>
       </div>
     </div>
 
-    <!-- ===================== ARCHIVE ===================== -->
+    <!-- ===================== ANOMALY LOG ===================== -->
     <section id="archive" class="screen screen--panel">
       <header class="archive__head">
         <div>
-          <p class="eyebrow">PERSONAL ARCHIVE</p>
-          <h2 class="archive__title">Transformed reality</h2>
+          <p class="eyebrow">ANOMALY LOG</p>
+          <h2 class="archive__title">Evidence of the render</h2>
         </div>
-        <button id="archive-close" class="btn btn--icon" aria-label="Close archive">✕</button>
+        <button id="archive-close" class="btn btn--icon" aria-label="Close log">✕</button>
       </header>
       <div id="archive-grid" class="archive__grid"></div>
       <p id="archive-empty" class="archive__empty">
-        Nothing archived yet.<br />
-        Hold an object in the field and save what it becomes.
+        Nothing logged yet.<br />
+        When an object feels wrong, log it. Build your case.
       </p>
     </section>
 

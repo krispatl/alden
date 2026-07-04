@@ -1,32 +1,15 @@
 # Latent Space Explorer
 
-A browser-based camera instrument. It looks through your camera, detects
-objects, and instead of labeling them literally, drifts them through poetic
-chains of latent association:
+A browser-based narrative CV/AR instrument. It looks through your camera,
+detects objects — and slowly convinces you the room is being rendered.
+Framed objects get story fragments in the voice of a simulation caught in
+the act: assets reused, entities loading late, render hints leaking through.
 
-> chair → throne → witness → ruin → monument
+> `0x4A2F · chair · LOD-1`
+> *This chair was not here when you weren't looking.*
 
-All frames are processed locally in the browser. Works fully offline with a
-curated local dictionary; optionally connects to an LLM for generated chains
-(see AI mode below).
-
-## AI mode (optional, one env var)
-
-The repo includes `api/latent-chain.ts` — a single Vercel serverless function
-that generates chains and poems with the Anthropic API (Claude Haiku).
-
-1. Deploy the repo to Vercel
-2. In the Vercel project settings, add the environment variable
-   `ANTHROPIC_API_KEY` (get one at https://console.anthropic.com)
-3. Done — the frontend probes `/api/latent-chain` automatically. When it's
-   live, the HUD shows `· ai drift`; when it's absent or fails, the local
-   dictionary takes over with no error.
-
-Privacy holds either way: only the detected **label text** (e.g. "chair") and
-other visible labels are sent — camera frames never leave the device.
-Responses are cached per label in localStorage to keep token usage tiny.
-Model string is set in `api/latent-chain.ts`; check https://docs.claude.com
-for current models if it's ever retired.
+All camera frames are processed locally in the browser. Works fully offline
+with the built-in narrative engine; optionally connects to an LLM narrator.
 
 ## Run
 
@@ -35,59 +18,74 @@ npm install
 npm run dev
 ```
 
-Open the printed URL. On desktop, localhost works directly. To test on a
-phone against your dev machine, camera access requires HTTPS — the quickest
-route is deploying, or `npm run dev -- --host` plus a tunnel (e.g. ngrok).
+On desktop, localhost works directly. To test on a phone, camera access
+requires HTTPS — quickest is deploying, or `npm run dev -- --host` + a
+tunnel (e.g. ngrok).
 
-## Build & deploy
+## Deploy
 
 ```bash
 npm run build
 ```
 
-Deploy the `dist/` folder to Vercel, Netlify, or Cloudflare Pages (all serve
-over HTTPS, which the camera requires).
+Deploy to Vercel / Netlify / Cloudflare Pages (all HTTPS).
 
-## Interactions
+## Live LLM narrator (optional, one env var)
 
-- **Scan** — point the camera; detected objects get glowing brackets and a
-  floating latent chain that reveals word by word
-- **Constellation telemetry** — curved threads connect detected objects,
-  fanned filaments reach into a flickering feature-point field sampled from
-  image contrast, and low-confidence detections render as raw echo boxes
-  with coordinate readouts
-- **Drift** — each object's chain mutates to a new variant every 8 seconds
-- **Tap** an object — expanded bottom sheet: label, confidence, full chain,
-  poetic fragment, Regenerate, Generate portal, Save discovery
-- **Hold** an object — portal bloom animation + fresh poetic fragment
-- **Archive** — saved discoveries (snapshot, chain, poem, timestamp) persist
-  in localStorage; delete from the gallery
+`api/latent-fragment.ts` is a single provider-agnostic Vercel function.
+Set **one** environment variable in your Vercel project:
+
+| Key                 | Provider → model        | Where to get it            |
+| ------------------- | ----------------------- | -------------------------- |
+| `OPENAI_API_KEY`    | OpenAI → gpt-4o-mini    | platform.openai.com        |
+| `GEMINI_API_KEY`    | Google → gemini-2.0-flash | aistudio.google.com (free tier) |
+| `ANTHROPIC_API_KEY` | Anthropic → Claude Haiku | console.anthropic.com      |
+
+The frontend probes the endpoint automatically. When live, the HUD shows
+`· live narrator` and new objects get bespoke fragments; when absent, the
+local engine takes over seamlessly. Only label text + story state are sent —
+never camera frames. Model strings drift; check provider docs if one 404s.
+
+## The experience
+
+- **Scan** — objects get glowing brackets, a telemetry tag
+  (`0x4A2F · cup · LOD-2`), and a typewriter story fragment
+- **Story state** — the narrative engine tracks encounters, session time,
+  and scene composition: your 4th chair reads differently than your 1st, and
+  after a few minutes the simulation starts noticing *you*
+- **AR particles** — every object emits particles tuned to its category:
+  screens shed pixels, plants release spores, furniture stirs dust
+- **Render anomalies** — occasionally a region spanning between objects
+  glitches: chromatic fringing, scan tearing, a wireframe flash
+- **Hold to inspect** — a rotating holographic wireframe primitive (matched
+  to the object's category) materializes above it, with a glitch burst
+- **Tap to read** — bottom sheet: entity telemetry, full fragment,
+  Inspect / New reading / Log anomaly
+- **Anomaly log** — logged evidence with session stamps (`T+00:03:42`),
+  snapshots, and fragments; the log *is* the story you assembled
+- **Sound** — fully synthesized (no audio files): low ambient drone, data
+  ticks, detection blips, inspect sweeps, glitch stutters, log chimes.
+  Mute toggle in the HUD, persisted
+- **Onboarding** — three quick cards on first run explain everything
 
 ## Structure
 
 ```
-index.html          screens: landing / loader / error / scanner / sheet / archive
+index.html          screens: landing / loader / error / scanner / sheet / log
 api/
-  latent-chain.ts   optional Vercel function → Anthropic API (the whole backend)
+  latent-fragment.ts  optional Vercel function → OpenAI / Gemini / Anthropic
 src/
-  main.ts           orchestration, render loop, tap & hold input, AI wiring
+  main.ts           orchestration, render loop, input, onboarding, AI wiring
   camera.ts         rear-camera getUserMedia with typed errors
-  detection.ts      COCO-SSD (code-split), 500 ms loop, IoU tracking, echo boxes
-  latentChains.ts   curated chain dictionary, fallbacks, poem templates
-  constellation.ts  feature-point field, connecting threads, telemetry readouts
-  ai.ts             /api/latent-chain client: cache, timeout, silent fallback
-  overlays.ts       canvas brackets, chain text, node particles, cover-fit mapping
-  portal.ts         chromatic ring + particle bloom layer
-  archive.ts        localStorage persistence, frame capture, gallery
+  detection.ts      COCO-SSD (code-split), 500 ms loop, IoU tracking
+  narrative.ts      story engine: fragments, story state, entity telemetry
+  overlays.ts       brackets, orbit nodes, narrative text, layer compositing
+  particles.ts      category-tuned AR particle emitters
+  glitch.ts         occasional render-anomaly shader between bounding boxes
+  hologram.ts       three.js wireframe primitives on inspect
+  audio.ts          synthesized sound design (Web Audio, no files)
+  ai.ts             /api/latent-fragment client with silent fallback
+  archive.ts        anomaly log: localStorage, snapshots, gallery
   types.ts          shared types
   styles.css        cyber-mystic UI (Space Grotesk / Space Mono)
 ```
-
-## Notes
-
-- Detection runs every 500 ms at confidence > 0.55 using the
-  `lite_mobilenet_v2` COCO-SSD base for mobile performance
-- Objects are tracked across frames (IoU matching) so chains and poems stay
-  stable while an object remains in view
-- Snapshots are stored as ~640 px JPEGs; if localStorage quota is hit, the
-  oldest entries are trimmed

@@ -1,18 +1,18 @@
 /**
  * Object detection: loads COCO-SSD and runs a throttled detection loop,
  * tracking objects across frames (IoU matching) so each object keeps a
- * stable id, chain, and poem while it stays in view.
+ * stable id and narrative while it stays in view.
  */
 
 import type * as cocoSsd from '@tensorflow-models/coco-ssd';
 import type { BBox, TrackedObject } from './types';
-import { generatePoem, getChains, randomChainIndex } from './latentChains';
+import { generateFragment, noteEncounter } from './narrative';
 
 const DETECT_INTERVAL_MS = 500;
 const MIN_CONFIDENCE = 0.55;
 const IOU_MATCH_THRESHOLD = 0.25;
 const STALE_MS = 1400;
-const DRIFT_MS = 8000;
+const DRIFT_MS = 11000;
 
 let model: cocoSsd.ObjectDetection | null = null;
 
@@ -39,35 +39,11 @@ function iou(a: BBox, b: BBox): number {
   return union > 0 ? inter / union : 0;
 }
 
-function createTracked(label: string, confidence: number, bbox: BBox): TrackedObject {
-  const chains = getChains(label);
-  const now = performance.now();
-  return {
-    id: crypto.randomUUID(),
-    label,
-    confidence,
-    bbox,
-    smoothBBox: [...bbox] as BBox,
-    chains,
-    chainIndex: randomChainIndex(chains),
-    chainChangedAt: now,
-    poem: generatePoem(label),
-    createdAt: now,
-    lastSeen: now,
-  };
-}
-
-export interface Echo {
-  bbox: BBox;
-  score: number;
-}
-
 export class Tracker {
   private objects = new Map<string, TrackedObject>();
-  private echoBoxes: Echo[] = [];
   private timer: number | null = null;
   private busy = false;
-  /** Called whenever a new object enters tracking (used for AI enrichment). */
+  /** Called whenever a new object enters tracking. */
   onCreate: ((obj: TrackedObject) => void) | null = null;
 
   constructor(private video: HTMLVideoElement) {}
@@ -77,9 +53,8 @@ export class Tracker {
     return [...this.objects.values()];
   }
 
-  /** Low-confidence detections from the latest pass (telemetry only). */
-  echoes(): Echo[] {
-    return this.echoBoxes;
+  labels(): string[] {
+    return this.list().map((o) => o.label);
   }
 
   get(id: string): TrackedObject | undefined {
@@ -102,42 +77,53 @@ export class Tracker {
     }
   }
 
-  /** Called every render frame: smooths boxes and advances semantic drift. */
+  /** Called every render frame: smooths boxes and refreshes stale fragments. */
   update(now: number): void {
     for (const obj of this.objects.values()) {
-      // Ease the display box toward the latest detection.
       for (let i = 0; i < 4; i++) {
         obj.smoothBBox[i] += (obj.bbox[i] - obj.smoothBBox[i]) * 0.18;
       }
-      // Semantic drift: rotate through chain variants.
-      if (obj.chains.length > 1 && now - obj.chainChangedAt > DRIFT_MS) {
-        obj.chainIndex = (obj.chainIndex + 1) % obj.chains.length;
-        obj.chainChangedAt = now;
+      // Narrative drift: the system re-reads the object every so often.
+      if (now - obj.fragmentChangedAt > DRIFT_MS) {
+        obj.fragment = generateFragment(obj, this.labels());
+        obj.fragmentChangedAt = now;
       }
     }
   }
 
-  /** Injects an AI-generated chain + poem as the object's primary variant. */
-  applyAi(id: string, chain: string[], poem: string): void {
-    const obj = this.objects.get(id);
-    if (!obj) return;
-    obj.chains = [chain, ...obj.chains];
-    obj.chainIndex = 0;
-    obj.chainChangedAt = performance.now();
-    obj.poem = poem;
-  }
-
-  /** Re-rolls the chain variant and poem for one object (Regenerate). */
+  /** Re-rolls the fragment for one object (New reading). */
   regenerate(id: string): TrackedObject | undefined {
     const obj = this.objects.get(id);
     if (!obj) return undefined;
-    if (obj.chains.length > 1) {
-      let next = obj.chainIndex;
-      while (next === obj.chainIndex) next = randomChainIndex(obj.chains);
-      obj.chainIndex = next;
-    }
-    obj.chainChangedAt = performance.now();
-    obj.poem = generatePoem(obj.label);
+    obj.fragment = generateFragment(obj, this.labels());
+    obj.fragmentChangedAt = performance.now();
+    return obj;
+  }
+
+  /** Replaces the fragment with an AI-generated one. */
+  applyAi(id: string, fragment: string): void {
+    const obj = this.objects.get(id);
+    if (!obj) return;
+    obj.fragment = fragment;
+    obj.fragmentChangedAt = performance.now();
+  }
+
+  private createTracked(label: string, confidence: number, bbox: BBox): TrackedObject {
+    const now = performance.now();
+    const encounter = noteEncounter(label);
+    const obj: TrackedObject = {
+      id: crypto.randomUUID(),
+      label,
+      confidence,
+      bbox,
+      smoothBBox: [...bbox] as BBox,
+      fragment: '',
+      fragmentChangedAt: now,
+      encounter,
+      createdAt: now,
+      lastSeen: now,
+    };
+    obj.fragment = generateFragment(obj, this.labels().concat(label));
     return obj;
   }
 
@@ -145,21 +131,14 @@ export class Tracker {
     if (!model || this.busy || this.video.readyState < 2) return;
     this.busy = true;
     try {
-      // Ask for everything down to 0.15: >0.55 becomes a tracked object,
-      // the rest render as raw telemetry echoes.
-      const predictions = await model.detect(this.video, 24, 0.15);
+      const predictions = await model.detect(this.video);
       const now = performance.now();
-
-      this.echoBoxes = predictions
-        .filter((p) => p.score >= 0.15 && p.score < MIN_CONFIDENCE)
-        .map((p) => ({ bbox: p.bbox as BBox, score: p.score }));
 
       const unmatched = new Set(this.objects.keys());
       for (const p of predictions) {
         if (p.score < MIN_CONFIDENCE) continue;
         const bbox = p.bbox as BBox;
 
-        // Match against an existing object of the same label.
         let bestId: string | null = null;
         let bestIou = IOU_MATCH_THRESHOLD;
         for (const id of unmatched) {
@@ -179,18 +158,17 @@ export class Tracker {
           obj.lastSeen = now;
           unmatched.delete(bestId);
         } else {
-          const created = createTracked(p.class, p.score, bbox);
+          const created = this.createTracked(p.class, p.score, bbox);
           this.objects.set(created.id, created);
           this.onCreate?.(created);
         }
       }
 
-      // Drop objects that have not been seen recently.
       for (const [id, obj] of this.objects) {
         if (now - obj.lastSeen > STALE_MS) this.objects.delete(id);
       }
     } catch {
-      /* transient detection errors (e.g. during resize) are non-fatal */
+      /* transient detection errors are non-fatal */
     } finally {
       this.busy = false;
     }

@@ -1,15 +1,17 @@
 /**
  * Latent Space Explorer — main orchestration.
- * Screen flow: landing → loader → scanner (⇄ sheet, ⇄ archive), with an
- * error screen for camera/model failures.
+ * Screen flow: landing → loader → onboarding (first run) → scanner
+ * (⇄ sheet, ⇄ anomaly log), with an error screen for camera/model failures.
  */
 
 import { startCamera, CameraError } from './camera';
 import { loadModel, Tracker } from './detection';
 import { OverlayRenderer } from './overlays';
-import { PortalLayer } from './portal';
+import { HologramLayer } from './hologram';
+import { AudioEngine } from './audio';
 import { deleteDiscovery, discoveryCount, renderArchive, saveDiscovery } from './archive';
-import { aiStatus, fetchLatentChain } from './ai';
+import { aiStatus, fetchFragment } from './ai';
+import { ambientLine, assetPath, categoryOf, entityId, lodTag } from './narrative';
 import type { TrackedObject } from './types';
 
 /* ------------------------------------------------------------------ DOM */
@@ -30,30 +32,35 @@ const screens = {
 
 const video = $<HTMLVideoElement>('camera');
 const overlayCanvas = $<HTMLCanvasElement>('overlay');
-const portalCanvas = $<HTMLCanvasElement>('portal-layer');
+const holoCanvas = $<HTMLCanvasElement>('holo-layer');
 const loaderStatus = $('loader-status');
 const errorMessage = $('error-message');
 const hudCount = $('hud-count');
+const hudTicker = $('hud-ticker');
 const archiveCountBadge = $('archive-count');
 const sheet = $('sheet');
 const sheetLabel = $('sheet-label');
-const sheetConfidence = $('sheet-confidence');
-const sheetChain = $('sheet-chain');
-const sheetPoem = $('sheet-poem');
+const sheetTelemetry = $('sheet-telemetry');
+const sheetFragment = $('sheet-fragment');
 const archiveGrid = $('archive-grid');
 const archiveEmpty = $('archive-empty');
 const toast = $('toast');
+const onboarding = $('onboarding');
+const onboardText = $('onboard-text');
 
 /* ---------------------------------------------------------------- state */
 
 const tracker = new Tracker(video);
 const overlay = new OverlayRenderer(overlayCanvas, video);
-const portal = new PortalLayer(portalCanvas);
+const hologram = new HologramLayer(holoCanvas);
+const audio = new AudioEngine();
 
 let running = false;
 let selectedId: string | null = null;
 let rafId = 0;
 let toastTimer = 0;
+let tickerTimer = 0;
+let lastAmbientGlitchCount = 0;
 
 function showScreen(name: keyof typeof screens): void {
   for (const [key, el] of Object.entries(screens)) {
@@ -72,26 +79,45 @@ function updateArchiveBadge(): void {
   archiveCountBadge.textContent = String(discoveryCount());
 }
 
+/* --------------------------------------------------------- AI enrichment */
+
+// When a new object enters tracking, ask the (optional) backend for a
+// bespoke fragment. Only labels + story state are sent — never frames.
+tracker.onCreate = (obj) => {
+  audio.detect();
+  void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((result) => {
+    if (!result || !tracker.get(obj.id)) return;
+    tracker.applyAi(obj.id, result.fragment);
+    if (selectedId === obj.id) fillSheet(tracker.get(obj.id)!);
+  });
+};
+
+// Audio tick when any on-screen fragment finishes typing out.
+overlay.onReveal = () => audio.tick();
+
 /* ----------------------------------------------------------- enter flow */
 
 async function enterLatentSpace(): Promise<void> {
+  audio.init(); // must happen inside the user gesture
   showScreen('loader');
   try {
     loaderStatus.textContent = 'requesting camera…';
-    const modelPromise = loadModel(); // load in parallel with permission
+    const modelPromise = loadModel();
     await startCamera(video);
 
-    loaderStatus.textContent = 'loading detection model…';
+    loaderStatus.textContent = 'loading renderer hooks…';
     await modelPromise;
 
-    loaderStatus.textContent = 'calibrating semantic field…';
+    loaderStatus.textContent = 'attaching observer…';
     await new Promise((r) => setTimeout(r, 400));
 
     showScreen('scanner');
     running = true;
     tracker.start();
     renderLoop();
+    startTicker();
     updateArchiveBadge();
+    maybeOnboard();
   } catch (err) {
     running = false;
     tracker.stop();
@@ -103,18 +129,49 @@ async function enterLatentSpace(): Promise<void> {
   }
 }
 
-/* --------------------------------------------------- AI enrichment */
+/* ------------------------------------------------------------ onboarding */
 
-// When a new object enters tracking, ask the (optional) backend for a
-// richer chain. Only labels are sent — never frames. Falls back silently.
-tracker.onCreate = (obj) => {
-  const sceneLabels = tracker.list().map((o) => o.label);
-  void fetchLatentChain(obj.label, sceneLabels).then((result) => {
-    if (!result || !tracker.get(obj.id)) return;
-    tracker.applyAi(obj.id, result.chain, result.poem);
-    if (selectedId === obj.id) fillSheet(tracker.get(obj.id)!);
-  });
-};
+const ONBOARD_KEY = 'lse-onboarded';
+const ONBOARD_STEPS = [
+  'Look around slowly. When the system recognizes an object, it frames it — and tells you something about how it\u2019s being rendered.',
+  'TAP a framed object to read its full entry. HOLD one to inspect it up close and see its render primitive.',
+  'When something feels wrong — an object that loads late, a detail that doesn\u2019t add up — LOG IT. Your anomaly log is the story of what you noticed.',
+];
+let onboardStep = 0;
+
+function maybeOnboard(): void {
+  if (localStorage.getItem(ONBOARD_KEY)) return;
+  onboardStep = 0;
+  onboardText.textContent = ONBOARD_STEPS[0];
+  $('onboard-next').textContent = 'Next';
+  onboarding.hidden = false;
+}
+
+function endOnboarding(): void {
+  onboarding.hidden = true;
+  localStorage.setItem(ONBOARD_KEY, '1');
+}
+
+$('onboard-next').addEventListener('click', () => {
+  onboardStep += 1;
+  if (onboardStep >= ONBOARD_STEPS.length) {
+    endOnboarding();
+    return;
+  }
+  onboardText.textContent = ONBOARD_STEPS[onboardStep];
+  if (onboardStep === ONBOARD_STEPS.length - 1) $('onboard-next').textContent = 'Begin';
+});
+
+$('onboard-skip').addEventListener('click', endOnboarding);
+
+/* ------------------------------------------------------------- HUD ticker */
+
+function startTicker(): void {
+  clearInterval(tickerTimer);
+  tickerTimer = window.setInterval(() => {
+    hudTicker.textContent = ambientLine();
+  }, 6000);
+}
 
 /* ---------------------------------------------------------- render loop */
 
@@ -124,16 +181,21 @@ function renderLoop(): void {
   tracker.update(now);
   const objects = tracker.list();
 
-  // Drop the selection if its object left the frame.
   if (selectedId && !tracker.get(selectedId)) {
     selectedId = null;
     closeSheet();
   }
 
-  overlay.render(objects, now, selectedId, tracker.echoes());
-  portal.render(now);
-  const mode = aiStatus() === 'on' ? ' · ai drift' : '';
-  hudCount.textContent = `${objects.length} signal${objects.length === 1 ? '' : 's'}${mode}`;
+  overlay.render(objects, now, selectedId);
+  hologram.tick(now);
+
+  // Quiet stutter sound when an ambient render anomaly fires.
+  const glitchCount = overlay.glitch.eventCount;
+  if (glitchCount > lastAmbientGlitchCount) audio.glitch();
+  lastAmbientGlitchCount = glitchCount;
+
+  const mode = aiStatus() === 'on' ? ' · live narrator' : '';
+  hudCount.textContent = `${objects.length} entit${objects.length === 1 ? 'y' : 'ies'}${mode}`;
   rafId = requestAnimationFrame(renderLoop);
 }
 
@@ -155,39 +217,40 @@ function hitTest(x: number, y: number): TrackedObject | null {
       const area = bw * bh;
       if (area < bestArea) {
         bestArea = area;
-        best = obj; // prefer the smallest (most specific) box
+        best = obj;
       }
     }
   }
   return best;
 }
 
-function triggerPortal(obj: TrackedObject): void {
-  const [x, y, w, h] = overlay.mapper()(obj.smoothBBox);
-  portal.bloom(x + w / 2, y + h / 2, Math.max(w, h));
+/** Inspect gesture: glitch burst + hologram + sound + select. */
+function inspect(obj: TrackedObject): void {
+  const rect = overlay.mapper()(obj.smoothBBox);
+  overlay.glitch.inspectBurst(rect);
+  hologram.show(categoryOf(obj.label), () => {
+    const o = tracker.get(obj.id);
+    return o ? overlay.mapper()(o.smoothBBox) : null;
+  });
+  audio.inspect();
+  if (navigator.vibrate) navigator.vibrate(30);
+  selectObject(obj.id);
 }
 
-portalCanvas.style.pointerEvents = 'none';
+holoCanvas.style.pointerEvents = 'none';
 overlayCanvas.addEventListener('pointerdown', (e) => {
   const obj = hitTest(e.clientX, e.clientY);
   const holdTimer = window.setTimeout(() => {
     if (!pointerDown) return;
     pointerDown = null;
-    if (obj && tracker.get(obj.id)) {
-      // Portal bloom on hold, plus fresh poem — the "portal bloom" gesture.
-      tracker.regenerate(obj.id);
-      triggerPortal(obj);
-      selectObject(obj.id);
-    }
+    if (obj && tracker.get(obj.id)) inspect(obj);
   }, HOLD_MS);
   pointerDown = { x: e.clientX, y: e.clientY, t: performance.now(), holdTimer };
 });
 
 overlayCanvas.addEventListener('pointermove', (e) => {
   if (!pointerDown) return;
-  const dx = e.clientX - pointerDown.x;
-  const dy = e.clientY - pointerDown.y;
-  if (Math.hypot(dx, dy) > TAP_MAX_MOVE) {
+  if (Math.hypot(e.clientX - pointerDown.x, e.clientY - pointerDown.y) > TAP_MAX_MOVE) {
     clearTimeout(pointerDown.holdTimer);
     pointerDown = null;
   }
@@ -226,23 +289,8 @@ function selectObject(id: string): void {
 
 function fillSheet(obj: TrackedObject): void {
   sheetLabel.textContent = obj.label;
-  sheetConfidence.textContent = `signal confidence ${(obj.confidence * 100).toFixed(0)}%`;
-  sheetChain.innerHTML = '';
-  const chain = obj.chains[obj.chainIndex];
-  chain.forEach((word, i) => {
-    const span = document.createElement('span');
-    span.className = 'sheet__chain-word';
-    span.style.animationDelay = `${i * 90}ms`;
-    span.textContent = word;
-    sheetChain.append(span);
-    if (i < chain.length - 1) {
-      const arrow = document.createElement('span');
-      arrow.className = 'sheet__chain-arrow';
-      arrow.textContent = '→';
-      sheetChain.append(arrow);
-    }
-  });
-  sheetPoem.textContent = obj.poem;
+  sheetTelemetry.textContent = `${entityId(obj.id)} · ${assetPath(obj.label, obj.id)} · ${lodTag(obj.id)} · ${(obj.confidence * 100).toFixed(0)}%`;
+  sheetFragment.textContent = obj.fragment;
 }
 
 function closeSheet(): void {
@@ -254,22 +302,20 @@ $('sheet-close').addEventListener('click', () => {
   closeSheet();
 });
 
-$('portal-btn').addEventListener('click', () => {
+$('inspect-btn').addEventListener('click', () => {
   const obj = selectedId ? tracker.get(selectedId) : null;
-  if (obj) triggerPortal(obj);
+  if (obj) inspect(obj);
 });
 
 $('regen-btn').addEventListener('click', () => {
   if (!selectedId) return;
   const id = selectedId;
-  const obj = tracker.regenerate(id); // instant local re-roll
+  const obj = tracker.regenerate(id); // instant local reading
   if (obj) fillSheet(obj);
-  // If the AI endpoint is live, replace with a freshly generated chain.
   if (obj && aiStatus() === 'on') {
-    const sceneLabels = tracker.list().map((o) => o.label);
-    void fetchLatentChain(obj.label, sceneLabels, true).then((result) => {
+    void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((result) => {
       if (!result || selectedId !== id || !tracker.get(id)) return;
-      tracker.applyAi(id, result.chain, result.poem);
+      tracker.applyAi(id, result.fragment);
       fillSheet(tracker.get(id)!);
     });
   }
@@ -281,11 +327,25 @@ $('save-btn').addEventListener('click', () => {
   const result = saveDiscovery(video, obj);
   if (result) {
     updateArchiveBadge();
-    showToast('Discovery archived');
+    audio.log();
+    showToast('Anomaly logged');
   } else {
-    showToast('Archive is full — delete some discoveries');
+    showToast('Log is full — delete some entries');
   }
 });
+
+/* --------------------------------------------------------------- audio ui */
+
+const muteBtn = $('mute-btn');
+function reflectMute(): void {
+  muteBtn.textContent = audio.muted ? '◇' : '◈';
+  muteBtn.setAttribute('aria-label', audio.muted ? 'Unmute sound' : 'Mute sound');
+}
+muteBtn.addEventListener('click', () => {
+  audio.toggleMute();
+  reflectMute();
+});
+reflectMute();
 
 /* -------------------------------------------------------------- archive */
 
@@ -315,12 +375,17 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     tracker.stop();
     cancelAnimationFrame(rafId);
+    audio.suspend();
   } else if (running) {
     tracker.start();
     renderLoop();
+    audio.resume();
   }
 });
 
 window.addEventListener('resize', () => {
-  if (running) overlay.resize();
+  if (running) {
+    overlay.resize();
+    hologram.resize();
+  }
 });

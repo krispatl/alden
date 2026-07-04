@@ -1,44 +1,22 @@
 /**
- * Optional AI enhancement layer. Talks to /api/latent-chain (a tiny
- * serverless function that proxies to the Anthropic API). Only the detected
- * label and other visible labels are sent — never camera frames.
+ * Optional AI enhancement layer. Talks to /api/latent-fragment (a tiny
+ * serverless function that proxies to an LLM provider). Only detected
+ * labels and story state are sent — never camera frames.
  *
  * If the endpoint is missing (local dev, static hosting) or fails, the app
- * silently stays on the local curated dictionary.
+ * silently stays on the local narrative engine.
  */
 
+import { sessionSeconds } from './narrative';
+
 export interface AiResult {
-  chain: string[];
-  poem: string;
+  fragment: string;
 }
 
-const ENDPOINT = '/api/latent-chain';
+const ENDPOINT = '/api/latent-fragment';
 const TIMEOUT_MS = 7000;
-const CACHE_KEY = 'latent-ai-cache-v1';
-const MAX_CACHE = 60;
 
 let available: boolean | null = null; // null = untested
-let cache: Record<string, AiResult> = loadCache();
-
-function loadCache(): Record<string, AiResult> {
-  try {
-    return JSON.parse(localStorage.getItem(CACHE_KEY) ?? '{}');
-  } catch {
-    return {};
-  }
-}
-
-function persistCache(): void {
-  try {
-    const keys = Object.keys(cache);
-    if (keys.length > MAX_CACHE) {
-      cache = Object.fromEntries(keys.slice(-MAX_CACHE).map((k) => [k, cache[k]]));
-    }
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-  } catch {
-    /* storage full — cache stays in memory */
-  }
-}
 
 export function aiStatus(): 'unknown' | 'on' | 'off' {
   return available === null ? 'unknown' : available ? 'on' : 'off';
@@ -46,28 +24,19 @@ export function aiStatus(): 'unknown' | 'on' | 'off' {
 
 function isValid(r: unknown): r is AiResult {
   const c = r as AiResult;
-  return (
-    !!c &&
-    Array.isArray(c.chain) &&
-    c.chain.length >= 3 &&
-    c.chain.every((w) => typeof w === 'string' && w.length < 60) &&
-    typeof c.poem === 'string' &&
-    c.poem.length > 0 &&
-    c.poem.length < 400
-  );
+  return !!c && typeof c.fragment === 'string' && c.fragment.length > 0 && c.fragment.length < 400;
 }
 
 /**
- * Requests an AI-generated chain + poem for a label. Resolves null on any
- * failure; the caller keeps its local chain.
+ * Requests an AI-generated fragment for a label. Resolves null on any
+ * failure; the caller keeps its local fragment.
  */
-export async function fetchLatentChain(
+export async function fetchFragment(
   label: string,
-  sceneLabels: string[],
-  fresh = false
+  encounter: number,
+  sceneLabels: string[]
 ): Promise<AiResult | null> {
   if (available === false) return null;
-  if (!fresh && cache[label]) return cache[label];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -78,23 +47,21 @@ export async function fetchLatentChain(
       signal: controller.signal,
       body: JSON.stringify({
         label,
+        encounter,
         sceneContext: sceneLabels.filter((l) => l !== label).slice(0, 8).join(', '),
-        tone: 'mystical, cosmic, cybernetic',
+        sessionMinutes: Math.floor(sessionSeconds() / 60),
       }),
     });
     if (!res.ok) {
-      // 404/405 means no backend deployed — stop asking this session.
       if (res.status === 404 || res.status === 405) available = false;
       return null;
     }
     const data: unknown = await res.json();
     if (!isValid(data)) return null;
     available = true;
-    cache[label] = data;
-    persistCache();
     return data;
   } catch {
-    if (available === null) available = false; // network/timeout on first try
+    if (available === null) available = false;
     return null;
   } finally {
     clearTimeout(timer);
