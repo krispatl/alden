@@ -19,12 +19,13 @@ Respond with ONLY a JSON object, no markdown fences:
 {"fragment": "Your sentence(s) here."}`;
 
 function buildUser(body: any): string {
-  const { label, encounter, sceneContext, sessionMinutes } = body;
+  const { label, encounter, prevLabel, sceneContext, sessionMinutes } = body;
   return [
-    `Object just noticed: ${String(label).slice(0, 60)}`,
-    encounter > 1 ? `This is the viewer's encounter #${encounter} with this object type.` : 'First encounter with this object type.',
-    sceneContext ? `Also visible: ${String(sceneContext).slice(0, 200)}` : '',
-    sessionMinutes >= 3 ? `The viewer has been observing for ${sessionMinutes} minutes; the simulation is starting to notice them back.` : '',
+    `Object the viewer just examined: ${String(label).slice(0, 60)}`,
+    encounter > 1 ? `This is their encounter #${encounter} with this object type.` : 'First encounter with this object type.',
+    prevLabel ? `The previous object they examined was: ${String(prevLabel).slice(0, 60)} — you may reference the shift in attention.` : '',
+    sceneContext ? `Also visible in the scene: ${String(sceneContext).slice(0, 200)}` : '',
+    sessionMinutes >= 3 ? `They have been observing for ${sessionMinutes} minutes; the simulation is starting to notice them back.` : '',
   ]
     .filter(Boolean)
     .join('\n');

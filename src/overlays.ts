@@ -62,7 +62,7 @@ export class OverlayRenderer {
     return ([x, y, w, h]: BBox): BBox => [x * scale + ox, y * scale + oy, w * scale, h * scale];
   }
 
-  render(objects: TrackedObject[], now: number, selectedId: string | null): void {
+  render(objects: TrackedObject[], now: number, activeId: string | null): void {
     this.resize();
     const { ctx } = this;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -77,23 +77,27 @@ export class OverlayRenderer {
     this.glitch.update(now, mappedRects);
     this.glitch.render(ctx, viewW, viewH);
 
-    // 2. AR particles per object.
+    // 2. AR particles — only the active object emits.
     const rectInfo = new Map<string, { rect: BBox; label: string }>();
-    objects.forEach((o, i) => rectInfo.set(o.id, { rect: mappedRects[i], label: o.label }));
+    objects.forEach((o, i) => {
+      if (o.id === activeId) rectInfo.set(o.id, { rect: mappedRects[i], label: o.label });
+    });
     this.particles.step(now, rectInfo);
     this.particles.render(ctx);
 
-    // 3. Brackets, orbit nodes, narrative text.
+    // 3. Brackets for everything; orbit nodes + narrative only when active.
     const liveIds = new Set<string>();
     objects.forEach((obj, i) => {
       liveIds.add(obj.id);
       const [x, y, w, h] = mappedRects[i];
-      const selected = obj.id === selectedId;
+      const active = obj.id === activeId;
       const appear = Math.min(1, (now - obj.createdAt) / 400);
 
-      this.drawBrackets(x, y, w, h, now, appear, selected);
-      this.drawNodes(obj.id, x, y, w, h, now, appear);
-      this.drawNarrative(obj, x, y, w, h, now, appear, viewW);
+      this.drawBrackets(x, y, w, h, now, appear, active);
+      if (active) {
+        this.drawNodes(obj.id, x, y, w, h, now, appear);
+        if (obj.fragment) this.drawNarrative(obj, x, y, w, h, now, appear, viewW);
+      }
     });
 
     for (const id of this.nodes.keys()) {
@@ -113,20 +117,28 @@ export class OverlayRenderer {
     h: number,
     now: number,
     appear: number,
-    selected: boolean
+    active: boolean
   ): void {
     const { ctx } = this;
-    const breath = 0.75 + 0.25 * Math.sin(now / 900);
     const len = Math.min(w, h) * 0.22;
-    const color = selected ? SIGNAL : PHOSPHOR;
 
     ctx.save();
-    ctx.globalAlpha = appear * (selected ? 1 : 0.85) * breath;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = selected ? 2 : 1.4;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = selected ? 14 : 8;
     ctx.lineCap = 'round';
+
+    if (active) {
+      const breath = 0.75 + 0.25 * Math.sin(now / 900);
+      ctx.globalAlpha = appear * breath;
+      ctx.strokeStyle = SIGNAL;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = SIGNAL;
+      ctx.shadowBlur = 14;
+    } else {
+      // Ambient: the system sees it, quietly.
+      ctx.globalAlpha = appear * 0.28;
+      ctx.strokeStyle = PHOSPHOR;
+      ctx.lineWidth = 1;
+      ctx.shadowBlur = 0;
+    }
 
     const corners: Array<[number, number, number, number]> = [
       [x, y, 1, 1],
@@ -142,14 +154,16 @@ export class OverlayRenderer {
     }
     ctx.stroke();
 
-    // Travelling shimmer along the top edge.
-    const t = (now / 1600) % 1;
-    ctx.globalAlpha = appear * 0.5;
-    ctx.shadowBlur = 0;
-    ctx.beginPath();
-    ctx.moveTo(x + w * Math.max(0, t - 0.12), y);
-    ctx.lineTo(x + w * t, y);
-    ctx.stroke();
+    if (active) {
+      // Travelling shimmer along the top edge.
+      const t = (now / 1600) % 1;
+      ctx.globalAlpha = appear * 0.5;
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.moveTo(x + w * Math.max(0, t - 0.12), y);
+      ctx.lineTo(x + w * t, y);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 

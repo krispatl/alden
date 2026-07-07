@@ -101,27 +101,42 @@ export function categoryOf(label: string): Category {
 interface Counts {
   perLabel: Map<string, number>;
   perCategory: Map<Category, number>;
-  total: number;
+  activations: number;
   saved: number;
   sessionStart: number;
+  prevLabel: string | null;
 }
 
 const state: Counts = {
   perLabel: new Map(),
   perCategory: new Map(),
-  total: 0,
+  activations: 0,
   saved: 0,
   sessionStart: performance.now(),
+  prevLabel: null,
 };
 
-/** Registers a first-time encounter. Returns encounter number for this label. */
-export function noteEncounter(label: string): number {
+/**
+ * Registers an activation (the observer tapped this object). Returns the
+ * encounter number for this label and rotates the previous-label memory.
+ */
+export function noteActivation(label: string): number {
   const cat = categoryOf(label);
   const n = (state.perLabel.get(label) ?? 0) + 1;
   state.perLabel.set(label, n);
   state.perCategory.set(cat, (state.perCategory.get(cat) ?? 0) + 1);
-  state.total += 1;
+  state.activations += 1;
   return n;
+}
+
+/** The label examined before the current one (one-step memory). */
+export function previousLabel(): string | null {
+  return state.prevLabel;
+}
+
+/** Call after generating, so the *next* activation can reference this one. */
+export function rememberLabel(label: string): void {
+  state.prevLabel = label;
 }
 
 export function noteSave(): void {
@@ -269,12 +284,30 @@ const REPEAT_FRAGMENTS = [
   'The {label} again. It is following you. Or you are following it.',
 ];
 
-/** Later-session fragments — the narrator gets more direct. */
+/** Late-arc fragments — the narrator addresses the observer directly. */
 const LATE_FRAGMENTS = [
   'You have been observing for {mins} minutes. The room is aware of this.',
   'Your attention has become a query. Objects are responding to it.',
   'The {label} is being rendered specifically for you.',
   'You are cataloguing us. That is not standard behavior.',
+  'Entry {act}. The log you are building has been noticed.',
+  'The {label} knew you would choose it next.',
+];
+
+/** Mid-arc fragments — the narrator starts pointing out patterns. */
+const PATTERN_FRAGMENTS = [
+  'That is {act} objects examined. A pattern is forming in your choices.',
+  'You keep selecting the rendered things. The unrendered things have noticed.',
+  'Every object you examine loads a little faster now. The system is learning you.',
+  'The {label} was pre-loaded. Something predicted your attention.',
+];
+
+/** Transition fragments — one-step memory of the previous object. */
+const TRANSITION_FRAGMENTS = [
+  'You turned away from the {prev}. The {label} was already waiting.',
+  'The {prev} is still rendered behind you. The {label} wants your attention now.',
+  'From {prev} to {label}. The system logs the path your attention takes.',
+  'The {label} appeared the moment you were done with the {prev}.',
 ];
 
 /** Fragments for when many objects are on screen at once. */
@@ -298,7 +331,9 @@ function interp(template: string, obj: TrackedObject, n = 1): string {
   return template
     .replaceAll('{label}', obj.label)
     .replaceAll('{n}', String(n))
-    .replaceAll('{mins}', String(Math.floor(sessionSeconds() / 60)));
+    .replaceAll('{act}', String(state.activations))
+    .replaceAll('{prev}', state.prevLabel ?? 'room')
+    .replaceAll('{mins}', String(Math.max(1, Math.floor(sessionSeconds() / 60))));
 }
 
 /**
@@ -308,18 +343,24 @@ function interp(template: string, obj: TrackedObject, n = 1): string {
 export function generateFragment(obj: TrackedObject, sceneLabels: string[]): string {
   const encounter = state.perLabel.get(obj.label) ?? 1;
   const isRepeat = encounter > 1;
-  const late = sessionSeconds() > 180;
-  const crowded = sceneLabels.length > 4;
+  const acts = state.activations;
   const cat = categoryOf(obj.label);
+  const hasPrev = state.prevLabel !== null && state.prevLabel !== obj.label;
+  const crowded = sceneLabels.length > 4;
 
-  // Weighted lane selection — a curated mix, not chaos.
+  // Session arc: neutral → pattern-noticing (5+) → addressing you (10+),
+  // with transitions and repeats woven through.
   const roll = Math.random();
   let template: string;
 
-  if (isRepeat && roll < 0.55) {
+  if (hasPrev && roll < 0.3) {
+    template = pick(TRANSITION_FRAGMENTS);
+  } else if (isRepeat && roll < 0.55) {
     template = pick(REPEAT_FRAGMENTS);
-  } else if (late && roll < 0.2) {
+  } else if (acts >= 10 && roll < 0.45) {
     template = pick(LATE_FRAGMENTS);
+  } else if (acts >= 5 && roll < 0.35) {
+    template = pick(PATTERN_FRAGMENTS);
   } else if (crowded && roll < 0.15) {
     template = pick(CROWDED_FRAGMENTS);
   } else if (cat === 'screen' && sceneLabels.filter((l) => categoryOf(l) === 'screen').length > 1 && roll < 0.3) {
@@ -328,7 +369,9 @@ export function generateFragment(obj: TrackedObject, sceneLabels: string[]): str
     template = pick(FRAGMENTS_BY_CATEGORY[cat]);
   }
 
-  return interp(template, obj, encounter);
+  const out = interp(template, obj, encounter);
+  rememberLabel(obj.label);
+  return out;
 }
 
 /* ------------------------------------------------ ambient system chatter */

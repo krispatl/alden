@@ -28,7 +28,8 @@ tunnel (e.g. ngrok).
 npm run build
 ```
 
-Deploy to Vercel / Netlify / Cloudflare Pages (all HTTPS).
+Deploy to Vercel / Netlify / Cloudflare Pages (all HTTPS). Fully
+self-contained: model + WASM ship with the build, no runtime CDNs.
 
 ## Live LLM narrator (optional, one env var)
 
@@ -46,26 +47,29 @@ The frontend probes the endpoint automatically. When live, the HUD shows
 local engine takes over seamlessly. Only label text + story state are sent —
 never camera frames. Model strings drift; check provider docs if one 404s.
 
-## The experience
+## The experience (v0.3 — three gestures, no panels)
 
-- **Scan** — objects get glowing brackets, a telemetry tag
-  (`0x4A2F · cup · LOD-2`), and a typewriter story fragment
-- **Story state** — the narrative engine tracks encounters, session time,
-  and scene composition: your 4th chair reads differently than your 1st, and
-  after a few minutes the simulation starts noticing *you*
-- **AR particles** — every object emits particles tuned to its category:
-  screens shed pixels, plants release spores, furniture stirs dust
+- **Look around** — everything the system recognizes gets a faint ambient
+  bracket: *seen, not yet examined*. Detection is YOLOv8-nano via ONNX
+  Runtime Web (80 COCO classes, noticeably tighter than COCO-SSD)
+- **TAP one object** — it becomes the single active entity: bright bracket,
+  telemetry tag, typewriter fragment, category-tuned particles — and the
+  moment is **auto-logged** (snapshot + fragment + session stamp). Tap again
+  for a new reading (updates the same log entry). One object active at a
+  time = one LLM call per tap, minimal tokens
+- **HOLD** — inspect: glitch burst + rotating holographic wireframe
+  primitive matched to the object's category
+- **Story arc** — the narrator moves from neutral observations → noticing
+  patterns in your choices (5+ objects) → addressing you directly (10+),
+  and threads one-step memory between taps ("You turned away from the
+  chair. The cup was already waiting.")
 - **Render anomalies** — occasionally a region spanning between objects
   glitches: chromatic fringing, scan tearing, a wireframe flash
-- **Hold to inspect** — a rotating holographic wireframe primitive (matched
-  to the object's category) materializes above it, with a glitch burst
-- **Tap to read** — bottom sheet: entity telemetry, full fragment,
-  Inspect / New reading / Log anomaly
-- **Anomaly log** — logged evidence with session stamps (`T+00:03:42`),
-  snapshots, and fragments; the log *is* the story you assembled
-- **Sound** — fully synthesized (no audio files): low ambient drone, data
-  ticks, detection blips, inspect sweeps, glitch stutters, log chimes.
-  Mute toggle in the HUD, persisted
+- **Anomaly log** — the only panel. Everything you tapped, in order, with
+  session stamps (`T+00:03:42`): the log *is* the story you assembled
+- **Sound** — fully synthesized (no audio files): ambient drone, data
+  ticks, activation blips, inspect sweeps, glitch stutters, log chimes.
+  Mute toggle persisted
 - **Onboarding** — three quick cards on first run explain everything
 
 ## Structure
@@ -74,18 +78,21 @@ never camera frames. Model strings drift; check provider docs if one 404s.
 index.html          screens: landing / loader / error / scanner / sheet / log
 api/
   latent-fragment.ts  optional Vercel function → OpenAI / Gemini / Anthropic
+public/
+  models/yolov8n.onnx  detection model (~12.8 MB, browser-cached)
 src/
-  main.ts           orchestration, render loop, input, onboarding, AI wiring
+  main.ts           orchestration, render loop, tap/hold, onboarding, AI wiring
   camera.ts         rear-camera getUserMedia with typed errors
-  detection.ts      COCO-SSD (code-split), 500 ms loop, IoU tracking
-  narrative.ts      story engine: fragments, story state, entity telemetry
+  yolo.ts           YOLOv8 ONNX inference: letterbox, decode, NMS
+  detection.ts      600 ms detection loop, IoU tracking
+  narrative.ts      story engine: fragments, session arc, entity telemetry
   overlays.ts       brackets, orbit nodes, narrative text, layer compositing
   particles.ts      category-tuned AR particle emitters
   glitch.ts         occasional render-anomaly shader between bounding boxes
   hologram.ts       three.js wireframe primitives on inspect
   audio.ts          synthesized sound design (Web Audio, no files)
   ai.ts             /api/latent-fragment client with silent fallback
-  archive.ts        anomaly log: localStorage, snapshots, gallery
+  archive.ts        anomaly log: localStorage, snapshots, gallery, updates
   types.ts          shared types
   styles.css        cyber-mystic UI (Space Grotesk / Space Mono)
 ```

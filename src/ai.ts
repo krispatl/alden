@@ -7,7 +7,7 @@
  * silently stays on the local narrative engine.
  */
 
-import { sessionSeconds } from './narrative';
+import { previousLabel, sessionSeconds } from './narrative';
 
 export interface AiResult {
   fragment: string;
@@ -48,6 +48,7 @@ export async function fetchFragment(
       body: JSON.stringify({
         label,
         encounter,
+        prevLabel: previousLabel(),
         sceneContext: sceneLabels.filter((l) => l !== label).slice(0, 8).join(', '),
         sessionMinutes: Math.floor(sessionSeconds() / 60),
       }),

@@ -1,7 +1,10 @@
 /**
  * Latent Space Explorer — main orchestration.
- * Screen flow: landing → loader → onboarding (first run) → scanner
- * (⇄ sheet, ⇄ anomaly log), with an error screen for camera/model failures.
+ *
+ * Interaction model (v0.3): brackets appear on everything the system sees;
+ * TAP one object to activate it — fragment types out, particles start, and
+ * the moment is auto-logged to the anomaly log. Tap it again for a new
+ * reading. HOLD to inspect (hologram + glitch burst). The log is the story.
  */
 
 import { startCamera, CameraError } from './camera';
@@ -9,9 +12,15 @@ import { loadModel, Tracker } from './detection';
 import { OverlayRenderer } from './overlays';
 import { HologramLayer } from './hologram';
 import { AudioEngine } from './audio';
-import { deleteDiscovery, discoveryCount, renderArchive, saveDiscovery } from './archive';
+import {
+  deleteDiscovery,
+  discoveryCount,
+  renderArchive,
+  saveDiscovery,
+  updateDiscoveryFragment,
+} from './archive';
 import { aiStatus, fetchFragment } from './ai';
-import { ambientLine, assetPath, categoryOf, entityId, lodTag } from './narrative';
+import { ambientLine, categoryOf, generateFragment, noteActivation } from './narrative';
 import type { TrackedObject } from './types';
 
 /* ------------------------------------------------------------------ DOM */
@@ -38,10 +47,6 @@ const errorMessage = $('error-message');
 const hudCount = $('hud-count');
 const hudTicker = $('hud-ticker');
 const archiveCountBadge = $('archive-count');
-const sheet = $('sheet');
-const sheetLabel = $('sheet-label');
-const sheetTelemetry = $('sheet-telemetry');
-const sheetFragment = $('sheet-fragment');
 const archiveGrid = $('archive-grid');
 const archiveEmpty = $('archive-empty');
 const toast = $('toast');
@@ -56,7 +61,9 @@ const hologram = new HologramLayer(holoCanvas);
 const audio = new AudioEngine();
 
 let running = false;
-let selectedId: string | null = null;
+let activeId: string | null = null;
+/** Log entry created for the current activation (updated if the LLM lands). */
+let activeLogId: string | null = null;
 let rafId = 0;
 let toastTimer = 0;
 let tickerTimer = 0;
@@ -79,21 +86,65 @@ function updateArchiveBadge(): void {
   archiveCountBadge.textContent = String(discoveryCount());
 }
 
-/* --------------------------------------------------------- AI enrichment */
+/* ----------------------------------------------------------- activation */
 
-// When a new object enters tracking, ask the (optional) backend for a
-// bespoke fragment. Only labels + story state are sent — never frames.
-tracker.onCreate = (obj) => {
+/**
+ * The core gesture. Activating an object: generates its reading, logs it,
+ * starts its particles, and (if a narrator backend exists) requests a
+ * bespoke fragment which then updates both the display and the log entry.
+ */
+function activate(obj: TrackedObject): void {
+  const isReactivation = obj.id === activeId;
+  activeId = obj.id;
+
+  if (!isReactivation) obj.encounter = noteActivation(obj.label);
+  tracker.setFragment(obj.id, generateFragment(obj, tracker.labels()));
   audio.detect();
-  void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((result) => {
-    if (!result || !tracker.get(obj.id)) return;
-    tracker.applyAi(obj.id, result.fragment);
-    if (selectedId === obj.id) fillSheet(tracker.get(obj.id)!);
-  });
-};
 
-// Audio tick when any on-screen fragment finishes typing out.
-overlay.onReveal = () => audio.tick();
+  // Auto-log: first activation creates the entry; re-taps refresh it.
+  if (!isReactivation || !activeLogId) {
+    const entry = saveDiscovery(video, obj);
+    if (entry) {
+      activeLogId = entry.id;
+      updateArchiveBadge();
+      audio.log();
+      showToast('Logged to anomaly log');
+    } else {
+      activeLogId = null;
+      showToast('Log is full — delete some entries');
+    }
+  } else {
+    updateDiscoveryFragment(activeLogId, obj.fragment);
+  }
+
+  // Live narrator (one call per activation; silently absent otherwise).
+  const logIdAtRequest = activeLogId;
+  void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((result) => {
+    if (!result) return;
+    if (logIdAtRequest) updateDiscoveryFragment(logIdAtRequest, result.fragment);
+    if (activeId === obj.id && tracker.get(obj.id)) {
+      tracker.setFragment(obj.id, result.fragment);
+    }
+  });
+}
+
+function deactivate(): void {
+  activeId = null;
+  activeLogId = null;
+}
+
+/** Inspect gesture: glitch burst + hologram + sound. */
+function inspect(obj: TrackedObject): void {
+  if (obj.id !== activeId) activate(obj);
+  const rect = overlay.mapper()(obj.smoothBBox);
+  overlay.glitch.inspectBurst(rect);
+  hologram.show(categoryOf(obj.label), () => {
+    const o = tracker.get(obj.id);
+    return o ? overlay.mapper()(o.smoothBBox) : null;
+  });
+  audio.inspect();
+  if (navigator.vibrate) navigator.vibrate(30);
+}
 
 /* ----------------------------------------------------------- enter flow */
 
@@ -133,9 +184,9 @@ async function enterLatentSpace(): Promise<void> {
 
 const ONBOARD_KEY = 'lse-onboarded';
 const ONBOARD_STEPS = [
-  'Look around slowly. When the system recognizes an object, it frames it — and tells you something about how it\u2019s being rendered.',
-  'TAP a framed object to read its full entry. HOLD one to inspect it up close and see its render primitive.',
-  'When something feels wrong — an object that loads late, a detail that doesn\u2019t add up — LOG IT. Your anomaly log is the story of what you noticed.',
+  'Look around slowly. When the system recognizes an object, a faint frame appears — it\u2019s being rendered for you.',
+  'TAP one object. It lights up, tells you something about how it\u2019s being rendered — and the moment is saved to your anomaly log automatically. Tap again for a new reading.',
+  'HOLD an object to inspect its render primitive up close. When you\u2019re done exploring, open the ANOMALY LOG — it\u2019s the story of everything you noticed.',
 ];
 let onboardStep = 0;
 
@@ -178,18 +229,14 @@ function startTicker(): void {
 function renderLoop(): void {
   if (!running) return;
   const now = performance.now();
-  tracker.update(now);
+  tracker.update();
   const objects = tracker.list();
 
-  if (selectedId && !tracker.get(selectedId)) {
-    selectedId = null;
-    closeSheet();
-  }
+  if (activeId && !tracker.get(activeId)) deactivate();
 
-  overlay.render(objects, now, selectedId);
+  overlay.render(objects, now, activeId);
   hologram.tick(now);
 
-  // Quiet stutter sound when an ambient render anomaly fires.
   const glitchCount = overlay.glitch.eventCount;
   if (glitchCount > lastAmbientGlitchCount) audio.glitch();
   lastAmbientGlitchCount = glitchCount;
@@ -224,19 +271,6 @@ function hitTest(x: number, y: number): TrackedObject | null {
   return best;
 }
 
-/** Inspect gesture: glitch burst + hologram + sound + select. */
-function inspect(obj: TrackedObject): void {
-  const rect = overlay.mapper()(obj.smoothBBox);
-  overlay.glitch.inspectBurst(rect);
-  hologram.show(categoryOf(obj.label), () => {
-    const o = tracker.get(obj.id);
-    return o ? overlay.mapper()(o.smoothBBox) : null;
-  });
-  audio.inspect();
-  if (navigator.vibrate) navigator.vibrate(30);
-  selectObject(obj.id);
-}
-
 holoCanvas.style.pointerEvents = 'none';
 overlayCanvas.addEventListener('pointerdown', (e) => {
   const obj = hitTest(e.clientX, e.clientY);
@@ -264,74 +298,13 @@ overlayCanvas.addEventListener('pointerup', (e) => {
   if (elapsed > TAP_MAX_MS) return;
 
   const obj = hitTest(e.clientX, e.clientY);
-  if (obj) {
-    selectObject(obj.id);
-  } else {
-    selectedId = null;
-    closeSheet();
-  }
+  if (obj) activate(obj);
+  else deactivate();
 });
 
 overlayCanvas.addEventListener('pointercancel', () => {
   if (pointerDown) clearTimeout(pointerDown.holdTimer);
   pointerDown = null;
-});
-
-/* --------------------------------------------------------- bottom sheet */
-
-function selectObject(id: string): void {
-  const obj = tracker.get(id);
-  if (!obj) return;
-  selectedId = id;
-  fillSheet(obj);
-  sheet.classList.add('sheet--open');
-}
-
-function fillSheet(obj: TrackedObject): void {
-  sheetLabel.textContent = obj.label;
-  sheetTelemetry.textContent = `${entityId(obj.id)} · ${assetPath(obj.label, obj.id)} · ${lodTag(obj.id)} · ${(obj.confidence * 100).toFixed(0)}%`;
-  sheetFragment.textContent = obj.fragment;
-}
-
-function closeSheet(): void {
-  sheet.classList.remove('sheet--open');
-}
-
-$('sheet-close').addEventListener('click', () => {
-  selectedId = null;
-  closeSheet();
-});
-
-$('inspect-btn').addEventListener('click', () => {
-  const obj = selectedId ? tracker.get(selectedId) : null;
-  if (obj) inspect(obj);
-});
-
-$('regen-btn').addEventListener('click', () => {
-  if (!selectedId) return;
-  const id = selectedId;
-  const obj = tracker.regenerate(id); // instant local reading
-  if (obj) fillSheet(obj);
-  if (obj && aiStatus() === 'on') {
-    void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((result) => {
-      if (!result || selectedId !== id || !tracker.get(id)) return;
-      tracker.applyAi(id, result.fragment);
-      fillSheet(tracker.get(id)!);
-    });
-  }
-});
-
-$('save-btn').addEventListener('click', () => {
-  const obj = selectedId ? tracker.get(selectedId) : null;
-  if (!obj) return;
-  const result = saveDiscovery(video, obj);
-  if (result) {
-    updateArchiveBadge();
-    audio.log();
-    showToast('Anomaly logged');
-  } else {
-    showToast('Log is full — delete some entries');
-  }
 });
 
 /* --------------------------------------------------------------- audio ui */
@@ -352,6 +325,7 @@ reflectMute();
 function refreshArchive(): void {
   renderArchive(archiveGrid, archiveEmpty, (id) => {
     deleteDiscovery(id);
+    if (id === activeLogId) activeLogId = null;
     refreshArchive();
     updateArchiveBadge();
   });

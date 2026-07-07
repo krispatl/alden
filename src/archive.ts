@@ -40,8 +40,8 @@ export function captureFrame(video: HTMLVideoElement): string {
   return c.toDataURL('image/jpeg', 0.72);
 }
 
-/** Logs an anomaly. Returns the updated list, or null if storage failed. */
-export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Discovery[] | null {
+/** Logs an anomaly. Returns the new entry, or null if storage failed. */
+export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Discovery | null {
   const discovery: Discovery = {
     id: crypto.randomUUID(),
     imageDataUrl: captureFrame(video),
@@ -54,14 +54,23 @@ export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Disc
   const all = [discovery, ...loadDiscoveries()];
   if (persist(all)) {
     noteSave();
-    return all;
+    return discovery;
   }
   const trimmed = all.slice(0, Math.max(1, all.length - 3));
   if (persist(trimmed)) {
     noteSave();
-    return trimmed;
+    return discovery;
   }
   return null;
+}
+
+/** Updates a logged entry's fragment (e.g. when the LLM narrator responds). */
+export function updateDiscoveryFragment(id: string, fragment: string): void {
+  const all = loadDiscoveries();
+  const entry = all.find((d) => d.id === id);
+  if (!entry) return;
+  entry.fragment = fragment;
+  persist(all);
 }
 
 export function deleteDiscovery(id: string): Discovery[] {
