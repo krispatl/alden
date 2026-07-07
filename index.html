@@ -2,53 +2,41 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#05070c" />
-    <meta
-      name="description"
-      content="Point your camera at ordinary objects. Read what the simulation says about them."
-    />
     <title>Latent Space Explorer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <!-- ===================== LANDING ===================== -->
+
+    <!-- ========== LANDING ========== -->
     <section id="landing" class="screen screen--visible">
       <div class="landing__grid" aria-hidden="true"></div>
+      <div class="landing__scanline" aria-hidden="true"></div>
       <div class="landing__inner">
-        <p class="eyebrow">FIELD INSTRUMENT · v0.3</p>
-        <h1 class="landing__title">
+        <p class="eyebrow fade-in">FIELD INSTRUMENT · THE WITNESS</p>
+        <h1 class="landing__title fade-in fd2">
           LATENT<br />SPACE<br />EXPLORER
         </h1>
-        <p class="landing__lede">
-          The room you're in is being rendered.<br />
-          Point your camera at ordinary objects<br />
-          and read what the simulation says about them.
+        <p class="landing__lede fade-in fd3">
+          Someone was here before you.<br />
+          They left traces in the render.<br />
+          Point your camera. Find what they left behind.
         </p>
-        <button id="enter-btn" class="btn btn--enter">
+        <button id="enter-btn" class="btn btn--enter fade-in fd4">
           <span class="btn--enter__ring" aria-hidden="true"></span>
           <span class="btn--enter__label">Begin observation</span>
         </button>
-        <p class="landing__privacy">
-          Camera frames are processed locally on your device.<br />
-          No images are uploaded.
+        <p class="landing__privacy fade-in fd5">
+          All processing happens on your device.<br />No images leave your phone.
         </p>
       </div>
-      <p class="landing__foot" aria-hidden="true">
-        renderer online · observer slot available · log ready
-      </p>
     </section>
 
-    <!-- ===================== LOADER ===================== -->
+    <!-- ========== LOADER ========== -->
     <section id="loader" class="screen">
       <div class="loader__inner">
         <div class="loader__reticle" aria-hidden="true"></div>
@@ -56,16 +44,16 @@
       </div>
     </section>
 
-    <!-- ===================== ERROR ===================== -->
+    <!-- ========== ERROR ========== -->
     <section id="error" class="screen">
       <div class="error__inner">
         <p class="eyebrow eyebrow--warn">SIGNAL LOST</p>
         <p id="error-message" class="error__message"></p>
-        <button id="retry-btn" class="btn btn--ghost">Try again</button>
+        <button id="retry-btn" class="btn btn--ghost">Retry</button>
       </div>
     </section>
 
-    <!-- ===================== SCANNER ===================== -->
+    <!-- ========== SCANNER ========== -->
     <section id="scanner" class="screen">
       <video id="camera" playsinline muted autoplay></video>
       <canvas id="overlay"></canvas>
@@ -78,49 +66,54 @@
           <span id="hud-ticker" class="hud__ticker">entity registry sync…</span>
         </div>
         <div class="hud__right">
-          <span id="hud-count" class="hud__count">0 entities</span>
+          <span id="hud-observer" class="hud__observer">OBS-0000</span>
           <button id="mute-btn" class="btn btn--icon btn--hudicon" aria-label="Toggle sound">◈</button>
         </div>
       </header>
 
       <footer class="hud hud--bottom">
-        <button id="archive-btn" class="btn btn--hud">
-          Anomaly log <span id="archive-count" class="hud__badge">0</span>
-        </button>
-        <span class="hud__hint">tap to read &amp; log · hold to inspect</span>
+        <div class="hud__bottom-row">
+          <button id="archive-btn" class="btn btn--hud">
+            Anomaly log <span id="archive-count" class="hud__badge">0</span>
+          </button>
+          <span id="hud-count" class="hud__count">0 entities</span>
+        </div>
+        <span class="hud__hint">tap to examine · hold to inspect</span>
       </footer>
 
-      <!-- Onboarding cards (first run) -->
+      <!-- Onboarding -->
       <div id="onboarding" class="onboard" hidden>
         <div class="onboard__card">
-          <p class="eyebrow">OBSERVER CALIBRATED</p>
           <p id="onboard-text" class="onboard__text"></p>
           <div class="onboard__actions">
             <button id="onboard-skip" class="btn btn--tiny">Skip</button>
-            <button id="onboard-next" class="btn btn--ghost">Next</button>
+            <button id="onboard-next" class="btn btn--ghost btn--small">Next</button>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ===================== ANOMALY LOG ===================== -->
+    <!-- ========== ANOMALY LOG ========== -->
     <section id="archive" class="screen screen--panel">
       <header class="archive__head">
         <div>
-          <p class="eyebrow">ANOMALY LOG</p>
-          <h2 class="archive__title">Evidence of the render</h2>
+          <p class="archive__classification">RECOVERED SESSION LOG</p>
+          <h2 class="archive__title">Anomaly log</h2>
+          <p id="archive-integrity" class="archive__integrity">INTEGRITY: —%</p>
         </div>
-        <button id="archive-close" class="btn btn--icon" aria-label="Close log">✕</button>
+        <div class="archive__head-actions">
+          <button id="archive-export" class="btn btn--tiny">Export</button>
+          <button id="archive-close" class="btn btn--icon" aria-label="Close">✕</button>
+        </div>
       </header>
       <div id="archive-grid" class="archive__grid"></div>
       <p id="archive-empty" class="archive__empty">
-        Nothing logged yet.<br />
-        When an object feels wrong, log it. Build your case.
+        No anomalies logged.<br />
+        Examine an object to begin building your case.
       </p>
     </section>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

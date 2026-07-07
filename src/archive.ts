@@ -1,6 +1,6 @@
 /**
- * Anomaly log: capture a camera frame, persist logged anomalies to
- * localStorage, and render the log with delete support.
+ * Anomaly log — recovered session log. Renders as a found document
+ * with integrity scoring and session stamps.
  */
 
 import type { Discovery, TrackedObject } from './types';
@@ -13,21 +13,14 @@ export function loadDiscoveries(): Discovery[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as Discovery[]) : [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 function persist(discoveries: Discovery[]): boolean {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(discoveries));
-    return true;
-  } catch {
-    return false;
-  }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(discoveries)); return true; }
+  catch { return false; }
 }
 
-/** Captures the current video frame as a compact JPEG data URL. */
 export function captureFrame(video: HTMLVideoElement): string {
   const vw = video.videoWidth || 640;
   const vh = video.videoHeight || 480;
@@ -35,12 +28,10 @@ export function captureFrame(video: HTMLVideoElement): string {
   const c = document.createElement('canvas');
   c.width = Math.round(vw * scale);
   c.height = Math.round(vh * scale);
-  const ctx = c.getContext('2d')!;
-  ctx.drawImage(video, 0, 0, c.width, c.height);
+  c.getContext('2d')!.drawImage(video, 0, 0, c.width, c.height);
   return c.toDataURL('image/jpeg', 0.72);
 }
 
-/** Logs an anomaly. Returns the new entry, or null if storage failed. */
 export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Discovery | null {
   const discovery: Discovery = {
     id: crypto.randomUUID(),
@@ -52,19 +43,12 @@ export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Disc
     createdAt: new Date().toISOString(),
   };
   const all = [discovery, ...loadDiscoveries()];
-  if (persist(all)) {
-    noteSave();
-    return discovery;
-  }
+  if (persist(all)) { noteSave(); return discovery; }
   const trimmed = all.slice(0, Math.max(1, all.length - 3));
-  if (persist(trimmed)) {
-    noteSave();
-    return discovery;
-  }
+  if (persist(trimmed)) { noteSave(); return discovery; }
   return null;
 }
 
-/** Updates a logged entry's fragment (e.g. when the LLM narrator responds). */
 export function updateDiscoveryFragment(id: string, fragment: string): void {
   const all = loadDiscoveries();
   const entry = all.find((d) => d.id === id);
@@ -74,21 +58,36 @@ export function updateDiscoveryFragment(id: string, fragment: string): void {
 }
 
 export function deleteDiscovery(id: string): Discovery[] {
-  const remaining = loadDiscoveries().filter((d) => d.id !== id);
-  persist(remaining);
-  return remaining;
+  const rem = loadDiscoveries().filter((d) => d.id !== id);
+  persist(rem);
+  return rem;
+}
+
+export function discoveryCount(): number {
+  return loadDiscoveries().length;
+}
+
+/** Builds the log as a shareable plain-text story (oldest first). */
+export function exportLogText(observerId: string, visits: number): string {
+  const discoveries = [...loadDiscoveries()].reverse();
+  const integrity = Math.max(12, 100 - discoveries.length * 3);
+  const lines = [
+    `RECOVERED SESSION LOG — ${observerId} — LOOP ${visits}`,
+    `INTEGRITY: ${integrity}% · ${discoveries.length} ENTRIES`,
+    '',
+  ];
+  for (const d of discoveries) {
+    lines.push(`${d.sessionStamp} · ${d.entityId} · ${d.label}`);
+    lines.push(d.fragment);
+    lines.push('');
+  }
+  lines.push('— end of recovered data —');
+  return lines.join('\n');
 }
 
 /* ------------------------------------------------------------------ */
 /* Log rendering                                                       */
 /* ------------------------------------------------------------------ */
-
-const dateFmt = new Intl.DateTimeFormat(undefined, {
-  month: 'short',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-});
 
 export function renderArchive(
   grid: HTMLElement,
@@ -99,6 +98,14 @@ export function renderArchive(
   grid.innerHTML = '';
   empty.style.display = discoveries.length ? 'none' : 'block';
 
+  // Update integrity display.
+  const integrity = document.getElementById('archive-integrity');
+  if (integrity) {
+    const pct = Math.max(12, 100 - discoveries.length * 3);
+    integrity.textContent = `INTEGRITY: ${pct}% · ${discoveries.length} ENTRIES`;
+  }
+
+  // Render in reverse chronological (newest at top = first tapped at bottom).
   for (const d of discoveries) {
     const card = document.createElement('article');
     card.className = 'discovery';
@@ -106,7 +113,7 @@ export function renderArchive(
     const img = document.createElement('img');
     img.className = 'discovery__img';
     img.src = d.imageDataUrl;
-    img.alt = `Logged ${d.label}`;
+    img.alt = `${d.label}`;
     img.loading = 'lazy';
 
     const body = document.createElement('div');
@@ -122,11 +129,9 @@ export function renderArchive(
 
     const foot = document.createElement('div');
     foot.className = 'discovery__foot';
-
     const date = document.createElement('span');
     date.className = 'discovery__date';
-    date.textContent = dateFmt.format(new Date(d.createdAt));
-
+    date.textContent = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(d.createdAt));
     const del = document.createElement('button');
     del.className = 'btn btn--tiny';
     del.textContent = 'Delete';
@@ -137,8 +142,4 @@ export function renderArchive(
     card.append(img, body);
     grid.append(card);
   }
-}
-
-export function discoveryCount(): number {
-  return loadDiscoveries().length;
 }

@@ -23,9 +23,13 @@ interface Node {
   size: number;
 }
 
+interface Ripple { x: number; y: number; startedAt: number; }
+
 export class OverlayRenderer {
   private ctx: CanvasRenderingContext2D;
   private nodes = new Map<string, Node[]>();
+  private ripples: Ripple[] = [];
+  private cachedMapper: { key: string; fn: BBoxMapper } | null = null;
   private dpr = 1;
   readonly particles = new ParticleLayer();
   readonly glitch: GlitchSurface;
@@ -50,16 +54,25 @@ export class OverlayRenderer {
     }
   }
 
-  /** Video-pixel → CSS-pixel mapper accounting for object-fit: cover. */
+  /** Video-pixel → CSS-pixel mapper accounting for object-fit: cover (memoized). */
   mapper(): BBoxMapper {
     const vw = this.video.videoWidth || 1;
     const vh = this.video.videoHeight || 1;
     const dw = this.canvas.clientWidth || 1;
     const dh = this.canvas.clientHeight || 1;
+    const key = `${vw}:${vh}:${dw}:${dh}`;
+    if (this.cachedMapper?.key === key) return this.cachedMapper.fn;
     const scale = Math.max(dw / vw, dh / vh);
     const ox = (dw - vw * scale) / 2;
     const oy = (dh - vh * scale) / 2;
-    return ([x, y, w, h]: BBox): BBox => [x * scale + ox, y * scale + oy, w * scale, h * scale];
+    const fn = ([x, y, w, h]: BBox): BBox => [x * scale + ox, y * scale + oy, w * scale, h * scale];
+    this.cachedMapper = { key, fn };
+    return fn;
+  }
+
+  /** Spawns a tap-feedback ripple at CSS-pixel coords. */
+  ripple(x: number, y: number): void {
+    this.ripples.push({ x, y, startedAt: performance.now() });
   }
 
   render(objects: TrackedObject[], now: number, activeId: string | null): void {
@@ -84,6 +97,20 @@ export class OverlayRenderer {
     });
     this.particles.step(now, rectInfo);
     this.particles.render(ctx);
+
+    // Tap ripples.
+    this.ripples = this.ripples.filter((r) => now - r.startedAt < 450);
+    for (const r of this.ripples) {
+      const t = (now - r.startedAt) / 450;
+      ctx.save();
+      ctx.globalAlpha = (1 - t) * 0.6;
+      ctx.strokeStyle = SIGNAL;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, 8 + t * 34, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // 3. Brackets for everything; orbit nodes + narrative only when active.
     const liveIds = new Set<string>();

@@ -1,14 +1,13 @@
 /**
- * Audio engine — the instrument's sound design, fully synthesized with the
- * Web Audio API (no audio files). Quiet, textural, diegetic: the sounds a
- * rendering system might leak.
+ * Audio engine — sound design that evolves with the narrative arc.
  *
- *  - ambient: low detuned drone + sparse data ticks
- *  - detect:  soft rising blip when a new object is framed
- *  - inspect: descending sweep + filtered noise (hologram open)
- *  - glitch:  short bandpassed noise stutter (render anomaly)
- *  - log:     two-note confirmation chime (anomaly saved)
- *  - tick:    tiny click when a fragment refreshes
+ * Act I:   quiet, neutral drone. Sparse data ticks.
+ * Act II:  second oscillator fades in (detuned fifth). Ticks more frequent.
+ * Act III: low heartbeat pulse appears. Drone shifts darker.
+ * Act IV:  everything present, dissonant undertone, breathing.
+ * Ending:  drone fades to nothing over 8 seconds.
+ *
+ * Events: detect blip, inspect sweep, glitch stutter, log chime, tick.
  */
 
 const MUTE_KEY = 'lse-muted';
@@ -16,23 +15,23 @@ const MUTE_KEY = 'lse-muted';
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
-  private ambientNodes: AudioNode[] = [];
-
+  private droneGain: GainNode | null = null;
+  private layer2Gain: GainNode | null = null;
+  private heartGain: GainNode | null = null;
+  private dissonanceGain: GainNode | null = null;
+  private heartOsc: OscillatorNode | null = null;
   muted = localStorage.getItem(MUTE_KEY) === '1';
 
-  /** Must be called from a user gesture (the Enter tap). */
   init(): void {
-    if (this.ctx) {
-      void this.ctx.resume();
-      return;
-    }
+    if (this.ctx) { void this.ctx.resume(); return; }
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     this.ctx = new Ctx();
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 1;
     this.master.connect(this.ctx.destination);
-    this.startAmbient();
+    this.buildDrone();
+    this.scheduleTicks();
   }
 
   toggleMute(): boolean {
@@ -44,201 +43,175 @@ export class AudioEngine {
     return this.muted;
   }
 
-  suspend(): void {
-    void this.ctx?.suspend();
-  }
+  suspend(): void { void this.ctx?.suspend(); }
+  resume(): void { void this.ctx?.resume(); }
 
-  resume(): void {
-    void this.ctx?.resume();
-  }
+  /* ---- drone layers ---- */
 
-  /* ------------------------------------------------------------ ambient */
-
-  private startAmbient(): void {
+  private buildDrone(): void {
     if (!this.ctx || !this.master) return;
     const ctx = this.ctx;
 
-    const ambientGain = ctx.createGain();
-    ambientGain.gain.value = 0.05;
-    ambientGain.connect(this.master);
+    // Layer 1: always-on base drone.
+    this.droneGain = ctx.createGain();
+    this.droneGain.gain.value = 0.04;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 200;
+    lp.connect(this.droneGain).connect(this.master);
 
-    const lowpass = ctx.createBiquadFilter();
-    lowpass.type = 'lowpass';
-    lowpass.frequency.value = 240;
-    lowpass.connect(ambientGain);
-
-    for (const [freq, type, detune] of [
-      [55, 'sine', 0],
-      [82.5, 'triangle', 4],
-      [110, 'sine', -6],
-    ] as const) {
-      const osc = ctx.createOscillator();
-      osc.type = type;
-      osc.frequency.value = freq;
-      osc.detune.value = detune;
-      const g = ctx.createGain();
-      g.gain.value = 0.33;
-      osc.connect(g).connect(lowpass);
-      osc.start();
-      this.ambientNodes.push(osc);
+    for (const [f, type, d] of [[55, 'sine', 0], [82, 'triangle', 5]] as const) {
+      const o = ctx.createOscillator();
+      o.type = type; o.frequency.value = f; o.detune.value = d;
+      o.connect(lp); o.start();
     }
 
-    // Slow breathing on the drone.
+    // LFO breathing on the base.
     const lfo = ctx.createOscillator();
-    lfo.frequency.value = 0.07;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 0.02;
-    lfo.connect(lfoGain).connect(ambientGain.gain);
+    lfo.frequency.value = 0.06;
+    const lfoG = ctx.createGain();
+    lfoG.gain.value = 0.015;
+    lfo.connect(lfoG).connect(this.droneGain.gain);
     lfo.start();
-    this.ambientNodes.push(lfo);
 
-    // Sparse "data ticks" wandering in the background.
-    const scheduleTick = () => {
-      this.dataTick();
-      window.setTimeout(scheduleTick, 3000 + Math.random() * 7000);
-    };
-    window.setTimeout(scheduleTick, 4000);
+    // Layer 2: detuned fifth, fades in at Act II.
+    this.layer2Gain = ctx.createGain();
+    this.layer2Gain.gain.value = 0;
+    const lp2 = ctx.createBiquadFilter();
+    lp2.type = 'lowpass'; lp2.frequency.value = 180;
+    lp2.connect(this.layer2Gain).connect(this.master);
+    for (const [f, d] of [[82, -8], [123, 3]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sine'; o.frequency.value = f; o.detune.value = d;
+      o.connect(lp2); o.start();
+    }
+
+    // Heartbeat: sub-bass pulse, fades in at Act III.
+    this.heartGain = ctx.createGain();
+    this.heartGain.gain.value = 0;
+    this.heartGain.connect(this.master);
+    this.heartOsc = ctx.createOscillator();
+    this.heartOsc.type = 'sine';
+    this.heartOsc.frequency.value = 38;
+    const heartEnv = ctx.createGain();
+    heartEnv.gain.value = 0;
+    this.heartOsc.connect(heartEnv).connect(this.heartGain);
+    this.heartOsc.start();
+    // Pulse LFO (heartbeat speed ~66 bpm = 1.1 Hz).
+    const hLfo = ctx.createOscillator();
+    hLfo.frequency.value = 1.1;
+    const hLfoG = ctx.createGain();
+    hLfoG.gain.value = 0.08;
+    hLfo.connect(hLfoG).connect(heartEnv.gain);
+    hLfo.start();
+
+    // Dissonance: tritone hum, barely there, Act IV.
+    this.dissonanceGain = ctx.createGain();
+    this.dissonanceGain.gain.value = 0;
+    const dlp = ctx.createBiquadFilter();
+    dlp.type = 'lowpass'; dlp.frequency.value = 140;
+    dlp.connect(this.dissonanceGain).connect(this.master);
+    const diss = ctx.createOscillator();
+    diss.type = 'sine'; diss.frequency.value = 77.8; // tritone of 55
+    diss.connect(dlp); diss.start();
   }
 
-  private dataTick(): void {
-    if (!this.ctx || !this.master || this.muted) return;
+  /** Call from the render loop with the current activation count. */
+  updateArc(activations: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    // Act II: second drone layer.
+    this.layer2Gain?.gain.setTargetAtTime(activations >= 6 ? 0.025 : 0, t, 2);
+    // Act III: heartbeat.
+    this.heartGain?.gain.setTargetAtTime(activations >= 11 ? 0.06 : 0, t, 2);
+    // Act IV: dissonance.
+    this.dissonanceGain?.gain.setTargetAtTime(activations >= 18 ? 0.018 : 0, t, 2);
+  }
+
+  /** Fade all drones to silence for the ending. */
+  fadeOut(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const g of [this.droneGain, this.layer2Gain, this.heartGain, this.dissonanceGain]) {
+      g?.gain.setTargetAtTime(0, t, 3);
+    }
+  }
+
+  private scheduleTicks(): void {
+    if (!this.ctx || !this.master) return;
     const ctx = this.ctx;
-    const t = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.value = 1800 + Math.random() * 2200;
+    const next = () => {
+      if (this.muted) { setTimeout(next, 4000); return; }
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = 1600 + Math.random() * 2400;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.01, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+      o.connect(g).connect(this.master!);
+      o.start(t); o.stop(t + 0.04);
+      setTimeout(next, 2500 + Math.random() * 5500);
+    };
+    setTimeout(next, 3000);
+  }
+
+  /* ---- events ---- */
+
+  detect(): void { this.play((t, out, ctx) => {
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(760, t);
+    o.frequency.exponentialRampToValueAtTime(1240, t + 0.09);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.012, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-    osc.connect(g).connect(this.master);
-    osc.start(t);
-    osc.stop(t + 0.04);
-  }
+    g.gain.setValueAtTime(0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g).connect(out); o.start(t); o.stop(t + 0.16);
+  }); }
 
-  /* ------------------------------------------------------------- events */
+  inspect(): void { this.play((t, out, ctx) => {
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(880, t);
+    o.frequency.exponentialRampToValueAtTime(140, t + 0.28);
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass';
+    f.frequency.setValueAtTime(2400, t);
+    f.frequency.exponentialRampToValueAtTime(300, t + 0.3);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.06, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+    o.connect(f).connect(g).connect(out); o.start(t); o.stop(t + 0.36);
+  }); }
 
-  /** Soft rising blip: a new object was framed. */
-  detect(): void {
-    this.tone((t, out, ctx) => {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(760, t);
-      osc.frequency.exponentialRampToValueAtTime(1240, t + 0.09);
+  glitch(): void { this.play((t, out, ctx) => {
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.18), ctx.sampleRate);
+    const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const n = ctx.createBufferSource(); n.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 6;
+    f.frequency.value = 600 + Math.random() * 2600;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t);
+    for (let i = 0; i < 3; i++) { g.gain.setValueAtTime(0.035, t + i * 0.05); g.gain.setValueAtTime(0.0001, t + i * 0.05 + 0.028); }
+    n.connect(f).connect(g).connect(out); n.start(t);
+  }); }
+
+  log(): void { this.play((t, out, ctx) => {
+    for (const [freq, at] of [[660, 0], [990, 0.11]] as const) {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = freq;
       const g = ctx.createGain();
-      g.gain.setValueAtTime(0.05, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-      osc.connect(g).connect(out);
-      osc.start(t);
-      osc.stop(t + 0.16);
-    });
-  }
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(0.05, t + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.3);
+      o.connect(g).connect(out); o.start(t + at); o.stop(t + at + 0.32);
+    }
+  }); }
 
-  /** Descending sweep + noise: hologram inspection opens. */
-  inspect(): void {
-    this.tone((t, out, ctx) => {
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(880, t);
-      osc.frequency.exponentialRampToValueAtTime(140, t + 0.28);
-      const f = ctx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.setValueAtTime(2400, t);
-      f.frequency.exponentialRampToValueAtTime(300, t + 0.3);
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.06, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
-      osc.connect(f).connect(g).connect(out);
-      osc.start(t);
-      osc.stop(t + 0.36);
+  tick(): void { this.play((t, out, ctx) => {
+    const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = 2600;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.015, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
+    o.connect(g).connect(out); o.start(t); o.stop(t + 0.03);
+  }); }
 
-      const noise = this.noiseSource(0.25);
-      if (noise) {
-        const nf = ctx.createBiquadFilter();
-        nf.type = 'bandpass';
-        nf.frequency.setValueAtTime(3000, t);
-        nf.frequency.exponentialRampToValueAtTime(500, t + 0.22);
-        const ng = ctx.createGain();
-        ng.gain.setValueAtTime(0.03, t);
-        ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
-        noise.connect(nf).connect(ng).connect(out);
-        noise.start(t);
-      }
-    });
-  }
-
-  /** Bandpassed noise stutter: a render anomaly rippled through the frame. */
-  glitch(): void {
-    this.tone((t, out, ctx) => {
-      const noise = this.noiseSource(0.18);
-      if (!noise) return;
-      const f = ctx.createBiquadFilter();
-      f.type = 'bandpass';
-      f.Q.value = 6;
-      f.frequency.value = 600 + Math.random() * 2600;
-      const g = ctx.createGain();
-      // Stutter envelope: three quick gates.
-      g.gain.setValueAtTime(0, t);
-      for (let i = 0; i < 3; i++) {
-        const s = t + i * 0.05;
-        g.gain.setValueAtTime(0.035, s);
-        g.gain.setValueAtTime(0.0001, s + 0.028);
-      }
-      noise.connect(f).connect(g).connect(out);
-      noise.start(t);
-    });
-  }
-
-  /** Two-note confirmation: anomaly logged. */
-  log(): void {
-    this.tone((t, out, ctx) => {
-      for (const [freq, at] of [
-        [660, 0],
-        [990, 0.11],
-      ] as const) {
-        const osc = ctx.createOscillator();
-        osc.type = 'triangle';
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(0.0001, t + at);
-        g.gain.exponentialRampToValueAtTime(0.05, t + at + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.3);
-        osc.connect(g).connect(out);
-        osc.start(t + at);
-        osc.stop(t + at + 0.32);
-      }
-    });
-  }
-
-  /** Tiny click when a fragment refreshes. */
-  tick(): void {
-    this.tone((t, out, ctx) => {
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.value = 2600;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.015, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
-      osc.connect(g).connect(out);
-      osc.start(t);
-      osc.stop(t + 0.03);
-    });
-  }
-
-  /* ------------------------------------------------------------ helpers */
-
-  private tone(build: (t: number, out: GainNode, ctx: AudioContext) => void): void {
+  private play(build: (t: number, out: GainNode, ctx: AudioContext) => void): void {
     if (!this.ctx || !this.master || this.muted) return;
     build(this.ctx.currentTime, this.master, this.ctx);
-  }
-
-  private noiseSource(seconds: number): AudioBufferSourceNode | null {
-    if (!this.ctx) return null;
-    const len = Math.floor(this.ctx.sampleRate * seconds);
-    const buffer = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-    const src = this.ctx.createBufferSource();
-    src.buffer = buffer;
-    return src;
   }
 }

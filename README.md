@@ -1,15 +1,28 @@
-# Latent Space Explorer
+# Latent Space Explorer — The Witness
 
-A browser-based narrative CV/AR instrument. It looks through your camera,
-detects objects — and slowly convinces you the room is being rendered.
-Framed objects get story fragments in the voice of a simulation caught in
-the act: assets reused, entities loading late, render hints leaking through.
+A narrative AR instrument. Point your camera at ordinary objects and piece
+together what happened here — who was in this room before you, and why the
+traces they left look so familiar.
 
-> `0x4A2F · chair · LOD-1`
-> *This chair was not here when you weren't looking.*
+> `T+03:42 · 0x4A2F · chair`
+> *The previous observer sat here for eleven minutes. The cushion still holds
+> their thermal signature in the render cache.*
 
-All camera frames are processed locally in the browser. Works fully offline
-with the built-in narrative engine; optionally connects to an LLM narrator.
+All processing happens on-device. Works fully offline with the built-in
+story engine; optionally connects to an LLM narrator for bespoke fragments.
+
+## The story
+
+Someone was here before you. They left traces in the render — thermal
+signatures in chairs, liquid levels in cups, pages bookmarked in books. As
+you examine objects you piece together what happened. Around the 10th object,
+the traces start matching your behavior eerily. By the 15th, you realize:
+the previous observer was you, from an earlier loop. The simulation resets
+between sessions, but the cache doesn't fully clear.
+
+The story unfolds across four acts gated by how many objects you've examined,
+building to a final entry at object 25. When you open the app again, it
+knows you've returned. Loop count increments. The narrator remembers.
 
 ## Run
 
@@ -18,81 +31,42 @@ npm install
 npm run dev
 ```
 
-On desktop, localhost works directly. To test on a phone, camera access
-requires HTTPS — quickest is deploying, or `npm run dev -- --host` + a
-tunnel (e.g. ngrok).
-
 ## Deploy
 
 ```bash
 npm run build
 ```
 
-Deploy to Vercel / Netlify / Cloudflare Pages (all HTTPS). Fully
-self-contained: model + WASM ship with the build, no runtime CDNs.
+Deploy `dist/` to Vercel / Netlify / Cloudflare Pages. Fully self-contained.
 
-## Live LLM narrator (optional, one env var)
+## LLM narrator (optional)
 
-`api/latent-fragment.ts` is a single provider-agnostic Vercel function.
-Set **one** environment variable in your Vercel project:
+Set one env var on Vercel — `OPENAI_API_KEY` (gpt-4o-mini),
+`GEMINI_API_KEY` (free tier), or `ANTHROPIC_API_KEY`. The backend receives
+a full story bible with act gates, and each call includes activation count,
+visit number, observer ID, and previous-object memory. The local engine
+mirrors the same arc offline.
 
-| Key                 | Provider → model        | Where to get it            |
-| ------------------- | ----------------------- | -------------------------- |
-| `OPENAI_API_KEY`    | OpenAI → gpt-4o-mini    | platform.openai.com        |
-| `GEMINI_API_KEY`    | Google → gemini-2.0-flash | aistudio.google.com (free tier) |
-| `ANTHROPIC_API_KEY` | Anthropic → Claude Haiku | console.anthropic.com      |
+## Three gestures
 
-The frontend probes the endpoint automatically. When live, the HUD shows
-`· live narrator` and new objects get bespoke fragments; when absent, the
-local engine takes over seamlessly. Only label text + story state are sent —
-never camera frames. Model strings drift; check provider docs if one 404s.
+- **Look around** — everything detected gets a faint ambient bracket
+- **Tap** — object becomes the sole active entity: bright bracket,
+  telemetry tag, typewriter fragment, category-tuned particles.
+  Auto-logged to the anomaly log. Tap again for a new reading
+- **Hold** — inspect: glitch burst + rotating holographic wireframe
 
-## The experience (v0.3 — three gestures, no panels)
+## What makes it feel like an installation
 
-- **Look around** — everything the system recognizes gets a faint ambient
-  bracket: *seen, not yet examined*. Detection is YOLOv8-nano via ONNX
-  Runtime Web (80 COCO classes, noticeably tighter than COCO-SSD)
-- **TAP one object** — it becomes the single active entity: bright bracket,
-  telemetry tag, typewriter fragment, category-tuned particles — and the
-  moment is **auto-logged** (snapshot + fragment + session stamp). Tap again
-  for a new reading (updates the same log entry). One object active at a
-  time = one LLM call per tap, minimal tokens
-- **HOLD** — inspect: glitch burst + rotating holographic wireframe
-  primitive matched to the object's category
-- **Story arc** — the narrator moves from neutral observations → noticing
-  patterns in your choices (5+ objects) → addressing you directly (10+),
-  and threads one-step memory between taps ("You turned away from the
-  chair. The cup was already waiting.")
-- **Render anomalies** — occasionally a region spanning between objects
-  glitches: chromatic fringing, scan tearing, a wireframe flash
-- **Anomaly log** — the only panel. Everything you tapped, in order, with
-  session stamps (`T+00:03:42`): the log *is* the story you assembled
-- **Sound** — fully synthesized (no audio files): ambient drone, data
-  ticks, activation blips, inspect sweeps, glitch stutters, log chimes.
-  Mute toggle persisted
-- **Onboarding** — three quick cards on first run explain everything
-
-## Structure
-
-```
-index.html          screens: landing / loader / error / scanner / sheet / log
-api/
-  latent-fragment.ts  optional Vercel function → OpenAI / Gemini / Anthropic
-public/
-  models/yolov8n.onnx  detection model (~12.8 MB, browser-cached)
-src/
-  main.ts           orchestration, render loop, tap/hold, onboarding, AI wiring
-  camera.ts         rear-camera getUserMedia with typed errors
-  yolo.ts           YOLOv8 ONNX inference: letterbox, decode, NMS
-  detection.ts      600 ms detection loop, IoU tracking
-  narrative.ts      story engine: fragments, session arc, entity telemetry
-  overlays.ts       brackets, orbit nodes, narrative text, layer compositing
-  particles.ts      category-tuned AR particle emitters
-  glitch.ts         occasional render-anomaly shader between bounding boxes
-  hologram.ts       three.js wireframe primitives on inspect
-  audio.ts          synthesized sound design (Web Audio, no files)
-  ai.ts             /api/latent-fragment client with silent fallback
-  archive.ts        anomaly log: localStorage, snapshots, gallery, updates
-  types.ts          shared types
-  styles.css        cyber-mystic UI (Space Grotesk / Space Mono)
-```
+- **Session persistence** — returning visitors get different openings;
+  the loop count and observer ID survive across sessions
+- **Sound arc** — ambient drone evolves: Act II adds a detuned fifth,
+  Act III a sub-bass heartbeat, Act IV a tritone dissonance. The ending
+  fades everything to silence
+- **Camera feed** — video desaturates, cools, and vignettes progressively
+  as the story darkens
+- **Person detection** — always eerie regardless of act: "The other
+  observer cannot see what you see"
+- **The ending** — at 25 objects the narrator delivers a final entry,
+  the sound fades, the HUD goes quiet. The piece is done
+- **Anomaly log** — styled as a recovered session document with
+  integrity percentage. Read top to bottom: that's the story you built

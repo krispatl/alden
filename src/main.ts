@@ -1,10 +1,10 @@
 /**
- * Latent Space Explorer — main orchestration.
+ * Latent Space Explorer — The Witness
  *
- * Interaction model (v0.3): brackets appear on everything the system sees;
- * TAP one object to activate it — fragment types out, particles start, and
- * the moment is auto-logged to the anomaly log. Tap it again for a new
- * reading. HOLD to inspect (hologram + glitch burst). The log is the story.
+ * Interaction: faint brackets on everything → tap to activate (auto-logged)
+ * → hold to inspect (hologram). The anomaly log is the story.
+ *
+ * Camera feed shifts subtly per act. Sound arc evolves. Session persists.
  */
 
 import { startCamera, CameraError } from './camera';
@@ -13,21 +13,22 @@ import { OverlayRenderer } from './overlays';
 import { HologramLayer } from './hologram';
 import { AudioEngine } from './audio';
 import {
-  deleteDiscovery,
-  discoveryCount,
-  renderArchive,
-  saveDiscovery,
-  updateDiscoveryFragment,
+  deleteDiscovery, discoveryCount, exportLogText, renderArchive,
+  saveDiscovery, updateDiscoveryFragment,
 } from './archive';
 import { aiStatus, fetchFragment } from './ai';
-import { ambientLine, categoryOf, generateFragment, noteActivation } from './narrative';
+import {
+  activationCount, ambientLine, categoryOf, generateFragment,
+  isEnded, noteActivation,
+} from './narrative';
+import * as session from './session';
 import type { TrackedObject } from './types';
 
 /* ------------------------------------------------------------------ DOM */
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
-  if (!el) throw new Error(`Missing element #${id}`);
+  if (!el) throw new Error(`Missing #${id}`);
   return el as T;
 };
 
@@ -46,6 +47,7 @@ const loaderStatus = $('loader-status');
 const errorMessage = $('error-message');
 const hudCount = $('hud-count');
 const hudTicker = $('hud-ticker');
+const hudObserver = $('hud-observer');
 const archiveCountBadge = $('archive-count');
 const archiveGrid = $('archive-grid');
 const archiveEmpty = $('archive-empty');
@@ -62,12 +64,12 @@ const audio = new AudioEngine();
 
 let running = false;
 let activeId: string | null = null;
-/** Log entry created for the current activation (updated if the LLM lands). */
 let activeLogId: string | null = null;
 let rafId = 0;
 let toastTimer = 0;
 let tickerTimer = 0;
-let lastAmbientGlitchCount = 0;
+let lastGlitchCount = 0;
+let endingTriggered = false;
 
 function showScreen(name: keyof typeof screens): void {
   for (const [key, el] of Object.entries(screens)) {
@@ -75,24 +77,43 @@ function showScreen(name: keyof typeof screens): void {
   }
 }
 
-function showToast(message: string): void {
-  toast.textContent = message;
+function showToast(msg: string): void {
+  toast.textContent = msg;
   toast.classList.add('toast--visible');
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toast.classList.remove('toast--visible'), 2200);
 }
 
-function updateArchiveBadge(): void {
+function updateBadge(): void {
   archiveCountBadge.textContent = String(discoveryCount());
+}
+
+/* ------------------------------------------------------ camera feed arc */
+
+function updateCameraArc(): void {
+  const a = activationCount();
+  if (a < 6) {
+    video.style.filter = 'saturate(0.88) contrast(1.02)';
+  } else if (a < 11) {
+    video.style.filter = 'saturate(0.78) contrast(1.04) brightness(0.97)';
+  } else if (a < 18) {
+    video.style.filter = 'saturate(0.65) contrast(1.06) brightness(0.94) hue-rotate(-4deg)';
+  } else {
+    video.style.filter = 'saturate(0.5) contrast(1.1) brightness(0.88) hue-rotate(-8deg)';
+  }
+  // Vignette intensifies.
+  const grain = document.querySelector('.scanner__grain') as HTMLElement;
+  if (grain) {
+    const vig = Math.min(0.85, 0.4 + a * 0.02);
+    grain.style.background = `
+      repeating-linear-gradient(0deg, rgba(122,244,210,0.02) 0 1px, transparent 1px 4px),
+      radial-gradient(ellipse at center, transparent 45%, rgba(5,7,12,${vig}) 100%)
+    `;
+  }
 }
 
 /* ----------------------------------------------------------- activation */
 
-/**
- * The core gesture. Activating an object: generates its reading, logs it,
- * starts its particles, and (if a narrator backend exists) requests a
- * bespoke fragment which then updates both the display and the log entry.
- */
 function activate(obj: TrackedObject): void {
   const isReactivation = obj.id === activeId;
   activeId = obj.id;
@@ -100,30 +121,40 @@ function activate(obj: TrackedObject): void {
   if (!isReactivation) obj.encounter = noteActivation(obj.label);
   tracker.setFragment(obj.id, generateFragment(obj, tracker.labels()));
   audio.detect();
+  updateCameraArc();
+  audio.updateArc(activationCount());
 
-  // Auto-log: first activation creates the entry; re-taps refresh it.
+  // Check for ending.
+  if (isEnded() && !endingTriggered) {
+    endingTriggered = true;
+    audio.fadeOut();
+    setTimeout(() => {
+      hudTicker.textContent = 'session complete';
+      showToast('The cache is full.');
+    }, 3000);
+  }
+
+  // Auto-log.
   if (!isReactivation || !activeLogId) {
     const entry = saveDiscovery(video, obj);
     if (entry) {
       activeLogId = entry.id;
-      updateArchiveBadge();
+      updateBadge();
       audio.log();
-      showToast('Logged to anomaly log');
     } else {
       activeLogId = null;
-      showToast('Log is full — delete some entries');
     }
   } else {
     updateDiscoveryFragment(activeLogId, obj.fragment);
   }
 
-  // Live narrator (one call per activation; silently absent otherwise).
-  const logIdAtRequest = activeLogId;
-  void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((result) => {
-    if (!result) return;
-    if (logIdAtRequest) updateDiscoveryFragment(logIdAtRequest, result.fragment);
+  // LLM narrator (one call per activation).
+  const logId = activeLogId;
+  void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((res) => {
+    if (!res) return;
+    if (logId) updateDiscoveryFragment(logId, res.fragment);
     if (activeId === obj.id && tracker.get(obj.id)) {
-      tracker.setFragment(obj.id, result.fragment);
+      tracker.setFragment(obj.id, res.fragment);
     }
   });
 }
@@ -133,7 +164,6 @@ function deactivate(): void {
   activeLogId = null;
 }
 
-/** Inspect gesture: glitch burst + hologram + sound. */
 function inspect(obj: TrackedObject): void {
   if (obj.id !== activeId) activate(obj);
   const rect = overlay.mapper()(obj.smoothBBox);
@@ -149,33 +179,34 @@ function inspect(obj: TrackedObject): void {
 /* ----------------------------------------------------------- enter flow */
 
 async function enterLatentSpace(): Promise<void> {
-  audio.init(); // must happen inside the user gesture
+  audio.init();
+  const s = session.beginVisit();
   showScreen('loader');
   try {
     loaderStatus.textContent = 'requesting camera…';
-    const modelPromise = loadModel();
+    const modelP = loadModel((pct) => {
+      loaderStatus.textContent = `loading detection model… ${pct}%`;
+    });
     await startCamera(video);
-
-    loaderStatus.textContent = 'loading renderer hooks…';
-    await modelPromise;
-
-    loaderStatus.textContent = 'attaching observer…';
-    await new Promise((r) => setTimeout(r, 400));
+    await modelP;
+    loaderStatus.textContent = 'synchronizing render cache…';
+    await new Promise((r) => setTimeout(r, 500));
 
     showScreen('scanner');
+    hudObserver.textContent = s.observerId;
     running = true;
     tracker.start();
     renderLoop();
     startTicker();
-    updateArchiveBadge();
+    updateBadge();
+    updateCameraArc();
     maybeOnboard();
   } catch (err) {
     running = false;
     tracker.stop();
-    errorMessage.textContent =
-      err instanceof CameraError
-        ? err.message
-        : 'The detection model could not be loaded. Check your connection and try again.';
+    errorMessage.textContent = err instanceof CameraError
+      ? err.message
+      : 'Detection model failed to load. Check your connection.';
     showScreen('error');
   }
 }
@@ -184,13 +215,15 @@ async function enterLatentSpace(): Promise<void> {
 
 const ONBOARD_KEY = 'lse-onboarded';
 const ONBOARD_STEPS = [
-  'Look around slowly. When the system recognizes an object, a faint frame appears — it\u2019s being rendered for you.',
-  'TAP one object. It lights up, tells you something about how it\u2019s being rendered — and the moment is saved to your anomaly log automatically. Tap again for a new reading.',
-  'HOLD an object to inspect its render primitive up close. When you\u2019re done exploring, open the ANOMALY LOG — it\u2019s the story of everything you noticed.',
+  'Someone was here before you. They left traces in the render. The system logged everything they touched — but the log is corrupted.',
+  'Look around slowly. When the system recognizes an object, a faint frame appears. TAP one to examine it — each tap adds to your anomaly log.',
+  'HOLD an object for a closer inspection. When you\'re ready, open the ANOMALY LOG. Read it top to bottom. That\'s the story.',
 ];
 let onboardStep = 0;
 
 function maybeOnboard(): void {
+  const s = session.load();
+  if (s.visits > 1) return; // returning visitors skip — they remember
   if (localStorage.getItem(ONBOARD_KEY)) return;
   onboardStep = 0;
   onboardText.textContent = ONBOARD_STEPS[0];
@@ -205,14 +238,10 @@ function endOnboarding(): void {
 
 $('onboard-next').addEventListener('click', () => {
   onboardStep += 1;
-  if (onboardStep >= ONBOARD_STEPS.length) {
-    endOnboarding();
-    return;
-  }
+  if (onboardStep >= ONBOARD_STEPS.length) { endOnboarding(); return; }
   onboardText.textContent = ONBOARD_STEPS[onboardStep];
   if (onboardStep === ONBOARD_STEPS.length - 1) $('onboard-next').textContent = 'Begin';
 });
-
 $('onboard-skip').addEventListener('click', endOnboarding);
 
 /* ------------------------------------------------------------- HUD ticker */
@@ -220,8 +249,8 @@ $('onboard-skip').addEventListener('click', endOnboarding);
 function startTicker(): void {
   clearInterval(tickerTimer);
   tickerTimer = window.setInterval(() => {
-    hudTicker.textContent = ambientLine();
-  }, 6000);
+    if (!endingTriggered) hudTicker.textContent = ambientLine();
+  }, 5500);
 }
 
 /* ---------------------------------------------------------- render loop */
@@ -237,35 +266,33 @@ function renderLoop(): void {
   overlay.render(objects, now, activeId);
   hologram.tick(now);
 
-  const glitchCount = overlay.glitch.eventCount;
-  if (glitchCount > lastAmbientGlitchCount) audio.glitch();
-  lastAmbientGlitchCount = glitchCount;
+  const gc = overlay.glitch.eventCount;
+  if (gc > lastGlitchCount) audio.glitch();
+  lastGlitchCount = gc;
 
   const mode = aiStatus() === 'on' ? ' · live narrator' : '';
-  hudCount.textContent = `${objects.length} entit${objects.length === 1 ? 'y' : 'ies'}${mode}`;
+  if (!endingTriggered) {
+    hudCount.textContent = `${objects.length} entit${objects.length === 1 ? 'y' : 'ies'}${mode}`;
+  }
   rafId = requestAnimationFrame(renderLoop);
 }
 
 /* ----------------------------------------------------- tap & hold input */
 
-const TAP_MAX_MS = 350;
+const TAP_MS = 350;
 const HOLD_MS = 550;
-const TAP_MAX_MOVE = 12;
-
-let pointerDown: { x: number; y: number; t: number; holdTimer: number } | null = null;
+const MOVE_PX = 12;
+let pd: { x: number; y: number; t: number; ht: number } | null = null;
 
 function hitTest(x: number, y: number): TrackedObject | null {
   const map = overlay.mapper();
   let best: TrackedObject | null = null;
-  let bestArea = Infinity;
+  let bestA = Infinity;
   for (const obj of tracker.list()) {
     const [bx, by, bw, bh] = map(obj.smoothBBox);
     if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
-      const area = bw * bh;
-      if (area < bestArea) {
-        bestArea = area;
-        best = obj;
-      }
+      const a = bw * bh;
+      if (a < bestA) { bestA = a; best = obj; }
     }
   }
   return best;
@@ -274,50 +301,37 @@ function hitTest(x: number, y: number): TrackedObject | null {
 holoCanvas.style.pointerEvents = 'none';
 overlayCanvas.addEventListener('pointerdown', (e) => {
   const obj = hitTest(e.clientX, e.clientY);
-  const holdTimer = window.setTimeout(() => {
-    if (!pointerDown) return;
-    pointerDown = null;
+  const ht = window.setTimeout(() => {
+    if (!pd) return; pd = null;
     if (obj && tracker.get(obj.id)) inspect(obj);
   }, HOLD_MS);
-  pointerDown = { x: e.clientX, y: e.clientY, t: performance.now(), holdTimer };
+  pd = { x: e.clientX, y: e.clientY, t: performance.now(), ht };
 });
-
 overlayCanvas.addEventListener('pointermove', (e) => {
-  if (!pointerDown) return;
-  if (Math.hypot(e.clientX - pointerDown.x, e.clientY - pointerDown.y) > TAP_MAX_MOVE) {
-    clearTimeout(pointerDown.holdTimer);
-    pointerDown = null;
+  if (!pd) return;
+  if (Math.hypot(e.clientX - pd.x, e.clientY - pd.y) > MOVE_PX) {
+    clearTimeout(pd.ht); pd = null;
   }
 });
-
 overlayCanvas.addEventListener('pointerup', (e) => {
-  if (!pointerDown) return;
-  clearTimeout(pointerDown.holdTimer);
-  const elapsed = performance.now() - pointerDown.t;
-  pointerDown = null;
-  if (elapsed > TAP_MAX_MS) return;
-
+  if (!pd) return;
+  clearTimeout(pd.ht);
+  const elapsed = performance.now() - pd.t; pd = null;
+  if (elapsed > TAP_MS) return;
   const obj = hitTest(e.clientX, e.clientY);
-  if (obj) activate(obj);
-  else deactivate();
+  overlay.ripple(e.clientX, e.clientY);
+  if (obj) activate(obj); else deactivate();
 });
-
-overlayCanvas.addEventListener('pointercancel', () => {
-  if (pointerDown) clearTimeout(pointerDown.holdTimer);
-  pointerDown = null;
-});
+overlayCanvas.addEventListener('pointercancel', () => { if (pd) clearTimeout(pd.ht); pd = null; });
 
 /* --------------------------------------------------------------- audio ui */
 
 const muteBtn = $('mute-btn');
 function reflectMute(): void {
   muteBtn.textContent = audio.muted ? '◇' : '◈';
-  muteBtn.setAttribute('aria-label', audio.muted ? 'Unmute sound' : 'Mute sound');
+  muteBtn.setAttribute('aria-label', audio.muted ? 'Unmute' : 'Mute');
 }
-muteBtn.addEventListener('click', () => {
-  audio.toggleMute();
-  reflectMute();
-});
+muteBtn.addEventListener('click', () => { audio.toggleMute(); reflectMute(); });
 reflectMute();
 
 /* -------------------------------------------------------------- archive */
@@ -326,18 +340,25 @@ function refreshArchive(): void {
   renderArchive(archiveGrid, archiveEmpty, (id) => {
     deleteDiscovery(id);
     if (id === activeLogId) activeLogId = null;
-    refreshArchive();
-    updateArchiveBadge();
+    refreshArchive(); updateBadge();
   });
 }
+$('archive-btn').addEventListener('click', () => { refreshArchive(); screens.archive.classList.add('screen--visible'); });
+$('archive-close').addEventListener('click', () => { screens.archive.classList.remove('screen--visible'); });
 
-$('archive-btn').addEventListener('click', () => {
-  refreshArchive();
-  screens.archive.classList.add('screen--visible');
-});
-
-$('archive-close').addEventListener('click', () => {
-  screens.archive.classList.remove('screen--visible');
+$('archive-export').addEventListener('click', async () => {
+  const s = session.load();
+  const text = exportLogText(s.observerId, s.visits);
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Recovered Session Log', text }); return; }
+    catch { /* user cancelled — fall through to clipboard */ }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Log copied to clipboard');
+  } catch {
+    showToast('Could not export log');
+  }
 });
 
 /* ----------------------------------------------------------- lifecycle */
@@ -346,20 +367,7 @@ $('enter-btn').addEventListener('click', () => void enterLatentSpace());
 $('retry-btn').addEventListener('click', () => void enterLatentSpace());
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    tracker.stop();
-    cancelAnimationFrame(rafId);
-    audio.suspend();
-  } else if (running) {
-    tracker.start();
-    renderLoop();
-    audio.resume();
-  }
+  if (document.hidden) { tracker.stop(); cancelAnimationFrame(rafId); audio.suspend(); }
+  else if (running) { tracker.start(); renderLoop(); audio.resume(); }
 });
-
-window.addEventListener('resize', () => {
-  if (running) {
-    overlay.resize();
-    hologram.resize();
-  }
-});
+window.addEventListener('resize', () => { if (running) { overlay.resize(); hologram.resize(); } });

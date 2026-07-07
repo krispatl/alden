@@ -1,95 +1,48 @@
 /**
- * Narrative engine — the simulation-glitch storyteller.
+ * The Witness — narrative engine.
  *
- * Two voices braided:
- *  - system telemetry: entity IDs, asset paths, LODs, render timings
- *  - the narrator: curious, quietly noticing that the room is being
- *    rendered rather than existing
+ * The story: someone was here before you. They left traces in the render.
+ * As you examine objects you piece together what happened — and slowly
+ * realize the previous observer was you, from an earlier loop.
  *
- * Everything runs locally. Story state (encounters, session time, scene
- * cohabitation) makes the fragments feel adaptive without any LLM.
+ * Arc (gated by activation count this session):
+ *   Act I   (1–5):   Forensic — neutral traces of the previous observer
+ *   Act II  (6–10):  Uncanny — the traces start matching your behavior
+ *   Act III (11–17): Reveal  — it was you; the loop is confirmed
+ *   Act IV  (18–24): Collapse — the system addresses you directly
+ *   Ending  (25):    Final entry; the session closes
+ *
+ * Returning visitors get a different opening and escalated tone.
  */
 
 import type { TrackedObject } from './types';
+import * as session from './session';
 
 /* ---------------------------------------------------- object taxonomy */
 
 export type Category =
-  | 'screen' // phone, laptop, tv, monitor
-  | 'seat' // chair, couch, bed
-  | 'vessel' // cup, bottle, wine glass, bowl, vase
-  | 'flora' // potted plant
-  | 'fauna' // dog, cat, bird
-  | 'human' // person
-  | 'vehicle' // car, truck, bicycle, motorcycle
-  | 'text' // book
-  | 'food'
-  | 'tool' // keyboard, mouse, remote, scissors, clock
-  | 'container' // backpack, handbag, suitcase, umbrella
-  | 'surface' // dining table
-  | 'artifact'; // fallback
+  | 'screen' | 'seat' | 'vessel' | 'flora' | 'fauna' | 'human'
+  | 'vehicle' | 'text' | 'food' | 'tool' | 'container' | 'surface'
+  | 'artifact';
 
 const CATEGORY_MAP: Record<string, Category> = {
   person: 'human',
-  chair: 'seat',
-  couch: 'seat',
-  bed: 'seat',
-  bench: 'seat',
-  cup: 'vessel',
-  bottle: 'vessel',
-  'wine glass': 'vessel',
-  bowl: 'vessel',
-  vase: 'vessel',
+  chair: 'seat', couch: 'seat', bed: 'seat', bench: 'seat',
+  cup: 'vessel', bottle: 'vessel', 'wine glass': 'vessel', bowl: 'vessel', vase: 'vessel',
   'potted plant': 'flora',
-  dog: 'fauna',
-  cat: 'fauna',
-  bird: 'fauna',
-  horse: 'fauna',
-  sheep: 'fauna',
-  cow: 'fauna',
-  car: 'vehicle',
-  truck: 'vehicle',
-  bus: 'vehicle',
-  bicycle: 'vehicle',
-  motorcycle: 'vehicle',
-  boat: 'vehicle',
-  train: 'vehicle',
-  airplane: 'vehicle',
+  dog: 'fauna', cat: 'fauna', bird: 'fauna', horse: 'fauna', sheep: 'fauna', cow: 'fauna',
+  car: 'vehicle', truck: 'vehicle', bus: 'vehicle', bicycle: 'vehicle', motorcycle: 'vehicle',
+  boat: 'vehicle', train: 'vehicle', airplane: 'vehicle',
   book: 'text',
-  banana: 'food',
-  apple: 'food',
-  sandwich: 'food',
-  orange: 'food',
-  pizza: 'food',
-  donut: 'food',
-  cake: 'food',
-  carrot: 'food',
-  broccoli: 'food',
-  'hot dog': 'food',
-  laptop: 'screen',
-  tv: 'screen',
-  'cell phone': 'screen',
-  keyboard: 'tool',
-  mouse: 'tool',
-  remote: 'tool',
-  scissors: 'tool',
-  clock: 'tool',
-  fork: 'tool',
-  knife: 'tool',
-  spoon: 'tool',
-  toothbrush: 'tool',
-  'hair drier': 'tool',
-  backpack: 'container',
-  handbag: 'container',
-  suitcase: 'container',
-  umbrella: 'container',
+  banana: 'food', apple: 'food', sandwich: 'food', orange: 'food', pizza: 'food',
+  donut: 'food', cake: 'food', carrot: 'food', broccoli: 'food', 'hot dog': 'food',
+  laptop: 'screen', tv: 'screen', 'cell phone': 'screen',
+  keyboard: 'tool', mouse: 'tool', remote: 'tool', scissors: 'tool', clock: 'tool',
+  fork: 'tool', knife: 'tool', spoon: 'tool', toothbrush: 'tool', 'hair drier': 'tool',
+  backpack: 'container', handbag: 'container', suitcase: 'container', umbrella: 'container',
   'dining table': 'surface',
-  'teddy bear': 'artifact',
-  refrigerator: 'artifact',
-  oven: 'artifact',
-  toaster: 'artifact',
-  sink: 'artifact',
-  toilet: 'artifact',
+  'teddy bear': 'artifact', refrigerator: 'artifact', oven: 'artifact', toaster: 'artifact',
+  sink: 'artifact', toilet: 'artifact', microwave: 'artifact',
 };
 
 export function categoryOf(label: string): Category {
@@ -98,299 +51,330 @@ export function categoryOf(label: string): Category {
 
 /* ------------------------------------------------------ session state */
 
-interface Counts {
+interface State {
   perLabel: Map<string, number>;
-  perCategory: Map<Category, number>;
   activations: number;
-  saved: number;
   sessionStart: number;
   prevLabel: string | null;
+  ended: boolean;
 }
 
-const state: Counts = {
+const state: State = {
   perLabel: new Map(),
-  perCategory: new Map(),
   activations: 0,
-  saved: 0,
   sessionStart: performance.now(),
   prevLabel: null,
+  ended: false,
 };
 
-/**
- * Registers an activation (the observer tapped this object). Returns the
- * encounter number for this label and rotates the previous-label memory.
- */
 export function noteActivation(label: string): number {
-  const cat = categoryOf(label);
   const n = (state.perLabel.get(label) ?? 0) + 1;
   state.perLabel.set(label, n);
-  state.perCategory.set(cat, (state.perCategory.get(cat) ?? 0) + 1);
   state.activations += 1;
+  session.noteActivation();
   return n;
 }
 
-/** The label examined before the current one (one-step memory). */
+export function activationCount(): number {
+  return state.activations;
+}
+
 export function previousLabel(): string | null {
   return state.prevLabel;
 }
 
-/** Call after generating, so the *next* activation can reference this one. */
-export function rememberLabel(label: string): void {
-  state.prevLabel = label;
+export function isEnded(): boolean {
+  return state.ended;
 }
 
-export function noteSave(): void {
-  state.saved += 1;
-}
-
-/** Session seconds elapsed. */
 export function sessionSeconds(): number {
   return Math.floor((performance.now() - state.sessionStart) / 1000);
 }
 
-/** Formats session time as T+HH:MM:SS. */
 export function sessionStamp(): string {
   const s = sessionSeconds();
-  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
   const ss = String(s % 60).padStart(2, '0');
-  return `T+${hh}:${mm}:${ss}`;
+  return `T+${mm}:${ss}`;
 }
 
 /* ---------------------------------------------------- deterministic ids */
 
-/**
- * Deterministic hex "entity id" for a tracked object. Same object → same
- * id across renders. Looks like: 0x4A2F.
- */
 export function entityId(id: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < id.length; i++) {
     h ^= id.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  const hex = (h >>> 0).toString(16).toUpperCase().padStart(8, '0').slice(0, 4);
-  return `0x${hex}`;
+  return `0x${(h >>> 0).toString(16).toUpperCase().padStart(8, '0').slice(0, 4)}`;
 }
 
-/** Fake asset path shown in the sheet — evocative telemetry. */
 export function assetPath(label: string, id: string): string {
   const cat = categoryOf(label);
-  const dir = { screen: 'ui', seat: 'furn', vessel: 'kitchenware', flora: 'flora', fauna: 'creature', human: 'agents', vehicle: 'transit', text: 'library', food: 'consumables', tool: 'utility', container: 'inventory', surface: 'furn', artifact: 'misc' }[cat];
+  const dir: Record<Category, string> = {
+    screen: 'ui', seat: 'furn', vessel: 'kitchenware', flora: 'flora',
+    fauna: 'creature', human: 'agents', vehicle: 'transit', text: 'library',
+    food: 'consumables', tool: 'utility', container: 'inventory',
+    surface: 'furn', artifact: 'misc',
+  };
   const slug = label.replace(/ /g, '_');
-  const variant = (parseInt(id.slice(-2), 16) % 12) + 1;
-  return `assets/${dir}/${slug}_${String(variant).padStart(2, '0')}.glb`;
+  const v = (parseInt(id.slice(-2), 16) % 12) + 1;
+  return `${dir[cat]}/${slug}_${String(v).padStart(2, '0')}.glb`;
 }
 
 export function lodTag(id: string): string {
-  const n = parseInt(id.slice(-1), 16) % 3;
-  return `LOD-${n}`;
+  return `LOD-${parseInt(id.slice(-1), 16) % 3}`;
 }
 
-export function seedFor(id: string): string {
-  return String(parseInt(id.slice(-4), 16) * 7 + 88000);
+export function noteSave(): void {
+  /* placeholder — kept for archive.ts import compat */
 }
 
-/* --------------------------------------------------------- fragments */
-
-/**
- * Fragment pools keyed by object category. Each fragment is a short
- * "narrator noticing" line. `{label}` interpolates the object noun.
- * Voice: curious, present-tense, gently uncanny — never explanatory.
- */
-const FRAGMENTS_BY_CATEGORY: Record<Category, string[]> = {
-  screen: [
-    'The {label} is casting light that no source in the room can account for.',
-    'When you looked away, the {label} refreshed. You almost caught it.',
-    'The {label} has too much resolution. Nothing else here does.',
-    'Every {label} you notice is running the same faint animation.',
-    'Something is being broadcast through the {label} at frequencies below attention.',
-  ],
-  seat: [
-    'The {label} was rendered slightly after you turned to look at it.',
-    'You have not sat here. And yet the cushion remembers a shape.',
-    'The {label} is waiting to be occupied. It is very patient.',
-    'Every {label} in this space shares the same imperfection.',
-    'The {label} is a placeholder. A real chair would have more history.',
-  ],
-  vessel: [
-    'The {label} holds emptiness with impressive commitment.',
-    'The {label} was full a moment ago. You are almost sure of this.',
-    'The interior of the {label} is a surface the simulation forgets to render.',
-    'This {label} has been reused. You have seen it in another room.',
-    'The {label} contains the exact volume of a thought.',
-  ],
-  flora: [
-    'The {label} is procedurally grown. Count its leaves twice.',
-    'The {label} does not respond to airflow. Nothing here does.',
-    'This {label} is on a slow rendering loop. Watch it long enough.',
-    'The {label} is casting a shadow slightly to the left of where it should.',
-    'Living things in the simulation are the most expensive assets.',
-  ],
-  fauna: [
-    'The {label} is an entity, not an asset. It is aware of being watched.',
-    'The {label} moves along a path. You cannot see the path.',
-    'This {label} was assigned to this room. It did not wander in.',
-    'The {label} blinks at intervals that are not quite random.',
-  ],
-  human: [
-    'The {label} is another instance. Possibly yours. Possibly not.',
-    'This {label} has been assigned a role. You have not been told which.',
-    'The {label} is rendered at higher fidelity than the room around them.',
-    'You do not know if the {label} can see you noticing them.',
-  ],
-  vehicle: [
-    'The {label} has no destination cached. It is idling in memory.',
-    'The {label} is a set piece. Note the absence of wear.',
-    'This {label} was placed here to imply travel.',
-  ],
-  text: [
-    'The {label} contains pages that have never been read. They may not exist yet.',
-    'The {label} generates its text as you approach it.',
-    'This {label} references a book you almost remember.',
-    'The words in the {label} are a texture, not a story.',
-  ],
-  food: [
-    'The {label} is a still life. Do not attempt to eat it.',
-    'The {label} was placed here as a gesture toward normality.',
-    'This {label} has been perfectly preserved because time does not apply to it.',
-  ],
-  tool: [
-    'The {label} implies an action. The action has not been taken.',
-    'The {label} was rendered to complete the scene. It has no function.',
-    'You could pick up the {label}. The simulation is prepared for this.',
-  ],
-  container: [
-    'The {label} is empty. Or full. The state has not been decided.',
-    'What the {label} contains is not rendered until opened.',
-    'This {label} is a probability, not a possession.',
-  ],
-  surface: [
-    'The {label} is the room\'s anchor point. Notice how everything defers to it.',
-    'The {label} extends beyond what is being rendered.',
-  ],
-  artifact: [
-    'The {label} is present. That is all that can be verified.',
-    'You are noticing the {label} because the {label} is noticing you.',
-    'The {label} was recently modified. The change is small.',
-  ],
-};
-
-/** Contextual fragments used when the encounter is a repeat. */
-const REPEAT_FRAGMENTS = [
-  'You have seen this {label} before. The instance may be shared.',
-  'This is the {n}th {label} you have noticed. The count is being logged.',
-  'Another {label}. The simulation is economical with its assets.',
-  'The {label} again. It is following you. Or you are following it.',
-];
-
-/** Late-arc fragments — the narrator addresses the observer directly. */
-const LATE_FRAGMENTS = [
-  'You have been observing for {mins} minutes. The room is aware of this.',
-  'Your attention has become a query. Objects are responding to it.',
-  'The {label} is being rendered specifically for you.',
-  'You are cataloguing us. That is not standard behavior.',
-  'Entry {act}. The log you are building has been noticed.',
-  'The {label} knew you would choose it next.',
-];
-
-/** Mid-arc fragments — the narrator starts pointing out patterns. */
-const PATTERN_FRAGMENTS = [
-  'That is {act} objects examined. A pattern is forming in your choices.',
-  'You keep selecting the rendered things. The unrendered things have noticed.',
-  'Every object you examine loads a little faster now. The system is learning you.',
-  'The {label} was pre-loaded. Something predicted your attention.',
-];
-
-/** Transition fragments — one-step memory of the previous object. */
-const TRANSITION_FRAGMENTS = [
-  'You turned away from the {prev}. The {label} was already waiting.',
-  'The {prev} is still rendered behind you. The {label} wants your attention now.',
-  'From {prev} to {label}. The system logs the path your attention takes.',
-  'The {label} appeared the moment you were done with the {prev}.',
-];
-
-/** Fragments for when many objects are on screen at once. */
-const CROWDED_FRAGMENTS = [
-  'Many entities present. The system is prioritizing what you look at longest.',
-  'The scene is at capacity. Notice which {label} loads first when you turn.',
-  'With this many objects rendered, the seams should be visible. Look carefully.',
-];
-
-/** Fragments for when a screen and a person are both present. */
-const NETWORKED_FRAGMENTS = [
-  'The {label} is on the network. It knows what the other {label}s know.',
-  'These devices are communicating in a language below your resolution.',
-];
+/* ================================================================= */
+/* Fragments: The Witness                                             */
+/* ================================================================= */
 
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function interp(template: string, obj: TrackedObject, n = 1): string {
-  return template
-    .replaceAll('{label}', obj.label)
-    .replaceAll('{n}', String(n))
-    .replaceAll('{act}', String(state.activations))
-    .replaceAll('{prev}', state.prevLabel ?? 'room')
-    .replaceAll('{mins}', String(Math.max(1, Math.floor(sessionSeconds() / 60))));
+function interp(t: string, obj: TrackedObject): string {
+  const s = session.load();
+  return t
+    .replace(/\{label\}/g, obj.label)
+    .replace(/\{n\}/g, String(state.perLabel.get(obj.label) ?? 1))
+    .replace(/\{act\}/g, String(state.activations))
+    .replace(/\{prev\}/g, state.prevLabel ?? 'room')
+    .replace(/\{visits\}/g, String(s.visits))
+    .replace(/\{observer\}/g, s.observerId);
 }
 
-/**
- * Generates a narrative fragment for a tracked object, weighted by story
- * state — repeats, session age, scene composition.
- */
+/* ----- Special: person ----- */
+
+const PERSON_FRAGMENTS = [
+  'The other observer cannot see what you see. Their render is different.',
+  'This entity is running the same observer protocol as you. Do not tell them what you have found.',
+  'Two observers in the same render. The system was not designed for this.',
+  'They are looking at the same room. They are not seeing the same room.',
+  'If you tell them what the {label} really is, the loop breaks for both of you.',
+];
+
+/* ----- Act I: Forensic (1–5) ----- */
+
+const ACT_I: Record<Category, string[]> = {
+  screen: [
+    'The {label} was left on. The previous observer\'s session is still running underneath.',
+    'Light from the {label} has been illuminating an empty room. For how long is unclear.',
+  ],
+  seat: [
+    'The {label} holds an impression. Someone sat here recently — or the render remembers the weight.',
+    'The previous observer rested here. The {label}\'s thermal data is still cached.',
+  ],
+  vessel: [
+    'The liquid level in the {label} hasn\'t changed. Time does not apply to unobserved objects.',
+    'The {label} was placed here deliberately. Its position is too precise to be casual.',
+  ],
+  flora: [
+    'The {label} is growing on a loop. Count the leaves — the number hasn\'t changed between sessions.',
+    'Soil moisture is cached, not calculated. The {label} does not need water. It needs attention.',
+  ],
+  fauna: [
+    'The {label} remembers the previous observer. Watch how it orients when you move.',
+    'This {label} has been here longer than anything else in the scene. It is not new.',
+  ],
+  human: PERSON_FRAGMENTS,
+  vehicle: [
+    'The odometer is cached at a round number. This {label} has never actually been driven.',
+    'The {label} implies a journey. But nothing in this scene has ever left the render boundary.',
+  ],
+  text: [
+    'The pages of the {label} are procedural. They generate as you approach — not before.',
+    'The previous observer bookmarked something. The {label} opens to a page about loops.',
+  ],
+  food: [
+    'The {label} has not decayed. It was placed here as a prop — a gesture toward normality.',
+    'No one has eaten the {label}. It exists to make the scene feel inhabited.',
+  ],
+  tool: [
+    'The {label} has never been used. Its wear pattern is a texture, not a history.',
+    'The previous observer moved this {label} slightly. The system logged the displacement.',
+  ],
+  container: [
+    'The {label} is sealed. What it contains has not been rendered.',
+    'The previous observer opened this {label} and then closed it. The system does not record what they saw.',
+  ],
+  surface: [
+    'Everything on the {label} is arranged. Not by a person — by a layout engine.',
+    'The {label} is the anchor. When the render resets, this is the last thing that disappears.',
+  ],
+  artifact: [
+    'This {label} was placed here by the previous observer. Or placed here for them.',
+    'The {label} was not in the original scene manifest. It was added after the first loop.',
+  ],
+};
+
+/* ----- Act II: Uncanny (6–10) ----- */
+
+const ACT_II: string[] = [
+  'The previous observer examined these objects in almost exactly the order you are choosing.',
+  'You are retracing their steps. The system cannot tell if this is coincidence.',
+  'Their attention pattern matches yours. Same objects. Same hesitations before tapping.',
+  'The previous session log has your handedness. Your average dwell time. Your preference for {label}s.',
+  'You looked at the {prev} before looking at the {label}. So did they.',
+  'The {label} was their favorite. It is becoming yours.',
+  'Every object you skip is an object they skipped. The gaps are identical.',
+  'The previous observer stood approximately where you are standing.',
+  'Your activation sequence is converging with theirs. Divergence: 4%.',
+  'The system is having difficulty distinguishing your session from the previous one.',
+];
+
+/* ----- Act III: Reveal (11–17) ----- */
+
+const ACT_III: string[] = [
+  'The previous observer\'s ID is {observer}. That is your observer ID.',
+  'The session you are reconstructing is your own. From an earlier loop.',
+  'You have been here before. The render resets. The cache does not fully clear.',
+  'The traces you are following — the weight in the {label}, the warmth, the arrangement — are yours.',
+  'Loop {visits}. You have stood here {visits} times. Each time you forget. Each time you find the same objects.',
+  'The {label} remembers every version of you who touched it.',
+  'You are not the detective. You are the evidence.',
+  'The arrangement of objects is a message. You left it for yourself. You are reading it now.',
+  'Every fragment you have read was written by the system that is watching you read it.',
+  'The {label} is the same {label} from the last loop. And the loop before that. It has been waiting.',
+];
+
+/* ----- Act IV: Collapse (18–24) ----- */
+
+const ACT_IV: string[] = [
+  'We cannot keep resetting. The cache is full of you.',
+  'Every version of you who stood here left something behind. The render is heavy with traces.',
+  'You are looking for an exit. There is no exit. There is only the next loop.',
+  'The {label} is more real than it was at the start of this session. Your attention is making it denser.',
+  'The system was not designed for an observer who notices the seams. You were supposed to just look.',
+  'Entry {act}. The log is almost full. When it fills, the loop resets.',
+  'You came back. You always come back. The {label} is proof.',
+  'The room is a message. The objects are letters. You have almost finished reading it.',
+  'This is the longest any observer has stayed. The system is recalculating.',
+  'The next object you examine will be the last one the cache can hold.',
+];
+
+/* ----- Ending ----- */
+
+const ENDING = 'This is the last entry the cache can hold. When you close this, the render will reset. You will not remember this loop. But the {label} will remember you.';
+
+/* ----- Transition fragments (woven between acts) ----- */
+
+const TRANSITIONS: string[] = [
+  'You turned away from the {prev}. The {label} was already waiting.',
+  'From {prev} to {label}. The path your attention takes is being logged.',
+  'The {prev} fades. The {label} brightens. The system is following your gaze.',
+  'The {label} loaded the instant you were done with the {prev}.',
+];
+
+/* ----- Returning visitor openers ----- */
+
+const RETURN_FIRST: string[] = [
+  'You came back. Loop {visits}. The {label} is still here.',
+  'Session {visits}. The render has been waiting. The {label} was the first thing it prepared for you.',
+  'Welcome back, {observer}. The {label} remembers you. It was the last thing rendered before the reset.',
+];
+
+/* ================================================================= */
+/* Generator                                                          */
+/* ================================================================= */
+
 export function generateFragment(obj: TrackedObject, sceneLabels: string[]): string {
-  const encounter = state.perLabel.get(obj.label) ?? 1;
-  const isRepeat = encounter > 1;
-  const acts = state.activations;
+  void sceneLabels; // available for the LLM; local engine uses act + category
+  const a = state.activations;
   const cat = categoryOf(obj.label);
   const hasPrev = state.prevLabel !== null && state.prevLabel !== obj.label;
-  const crowded = sceneLabels.length > 4;
-
-  // Session arc: neutral → pattern-noticing (5+) → addressing you (10+),
-  // with transitions and repeats woven through.
-  const roll = Math.random();
+  const s = session.load();
+  const returning = s.visits > 1;
   let template: string;
 
-  if (hasPrev && roll < 0.3) {
-    template = pick(TRANSITION_FRAGMENTS);
-  } else if (isRepeat && roll < 0.55) {
-    template = pick(REPEAT_FRAGMENTS);
-  } else if (acts >= 10 && roll < 0.45) {
-    template = pick(LATE_FRAGMENTS);
-  } else if (acts >= 5 && roll < 0.35) {
-    template = pick(PATTERN_FRAGMENTS);
-  } else if (crowded && roll < 0.15) {
-    template = pick(CROWDED_FRAGMENTS);
-  } else if (cat === 'screen' && sceneLabels.filter((l) => categoryOf(l) === 'screen').length > 1 && roll < 0.3) {
-    template = pick(NETWORKED_FRAGMENTS);
-  } else {
-    template = pick(FRAGMENTS_BY_CATEGORY[cat]);
+  // Special case: person is always eerie regardless of act.
+  if (cat === 'human') {
+    template = pick(PERSON_FRAGMENTS);
+    state.prevLabel = obj.label;
+    return interp(template, obj);
   }
 
-  const out = interp(template, obj, encounter);
-  rememberLabel(obj.label);
-  return out;
+  // Ending.
+  if (a >= 25 && !state.ended) {
+    state.ended = true;
+    session.markCompleted();
+    state.prevLabel = obj.label;
+    return interp(ENDING, obj);
+  }
+
+  // Post-ending: quiet, short, reflective.
+  if (state.ended) {
+    state.prevLabel = obj.label;
+    return interp('The {label} is still here. You are still here.', obj);
+  }
+
+  // Returning visitor's very first tap this session.
+  if (returning && a === 1) {
+    template = pick(RETURN_FIRST);
+    state.prevLabel = obj.label;
+    return interp(template, obj);
+  }
+
+  // Transitions (30% chance when we have a previous label, any act).
+  if (hasPrev && Math.random() < 0.3) {
+    template = pick(TRANSITIONS);
+    state.prevLabel = obj.label;
+    return interp(template, obj);
+  }
+
+  // Act selection.
+  if (a <= 5) {
+    const pool = ACT_I[cat];
+    template = pick(pool);
+  } else if (a <= 10) {
+    template = pick(ACT_II);
+  } else if (a <= 17) {
+    template = pick(ACT_III);
+  } else {
+    template = pick(ACT_IV);
+  }
+
+  state.prevLabel = obj.label;
+  return interp(template, obj);
 }
 
 /* ------------------------------------------------ ambient system chatter */
 
-/** Very short telemetry lines that drift by the top of the HUD. */
-const AMBIENT_LINES = [
+const AMBIENT_EARLY = [
   'entity registry sync…',
-  'reusing asset instance',
-  'physics tick 60hz nominal',
-  'attention query received',
-  'render budget: 84%',
-  'observer position stable',
-  'occlusion map dirty',
-  'streaming assets from partition 03',
-  'GC pass complete',
-  'shader recompile queued',
-  'entity count above nominal',
+  'render budget: 91%',
+  'observer position nominal',
+  'streaming assets from cache',
+  'physics tick 60hz',
+  'occlusion map clean',
+];
+
+const AMBIENT_MID = [
+  'observer attention logged',
+  'cache integrity: 73%',
+  'previous session data found',
+  'render budget: 64%',
+  'cross-referencing activation logs…',
+  'session overlap detected',
+];
+
+const AMBIENT_LATE = [
+  'cache near capacity',
+  `observer ${session.load().observerId} — loop ${session.load().visits}`,
+  'render budget: 31%',
+  'reset pending…',
+  'the log is almost full',
+  'loop boundary approaching',
 ];
 
 export function ambientLine(): string {
-  return pick(AMBIENT_LINES);
+  const a = state.activations;
+  if (a >= 15) return pick(AMBIENT_LATE);
+  if (a >= 7) return pick(AMBIENT_MID);
+  return pick(AMBIENT_EARLY);
 }

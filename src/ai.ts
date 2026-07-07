@@ -1,22 +1,16 @@
 /**
- * Optional AI enhancement layer. Talks to /api/latent-fragment (a tiny
- * serverless function that proxies to an LLM provider). Only detected
- * labels and story state are sent — never camera frames.
- *
- * If the endpoint is missing (local dev, static hosting) or fails, the app
- * silently stays on the local narrative engine.
+ * Optional AI narrator client. Sends label + story state to the backend;
+ * falls back silently when absent.
  */
 
-import { previousLabel, sessionSeconds } from './narrative';
+import { activationCount, previousLabel, sessionSeconds } from './narrative';
+import * as session from './session';
 
-export interface AiResult {
-  fragment: string;
-}
+export interface AiResult { fragment: string; }
 
 const ENDPOINT = '/api/latent-fragment';
 const TIMEOUT_MS = 7000;
-
-let available: boolean | null = null; // null = untested
+let available: boolean | null = null;
 
 export function aiStatus(): 'unknown' | 'on' | 'off' {
   return available === null ? 'unknown' : available ? 'on' : 'off';
@@ -27,17 +21,13 @@ function isValid(r: unknown): r is AiResult {
   return !!c && typeof c.fragment === 'string' && c.fragment.length > 0 && c.fragment.length < 400;
 }
 
-/**
- * Requests an AI-generated fragment for a label. Resolves null on any
- * failure; the caller keeps its local fragment.
- */
 export async function fetchFragment(
   label: string,
   encounter: number,
   sceneLabels: string[]
 ): Promise<AiResult | null> {
   if (available === false) return null;
-
+  const s = session.load();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -50,6 +40,9 @@ export async function fetchFragment(
         encounter,
         prevLabel: previousLabel(),
         sceneContext: sceneLabels.filter((l) => l !== label).slice(0, 8).join(', '),
+        activations: activationCount(),
+        visits: s.visits,
+        observerId: s.observerId,
         sessionMinutes: Math.floor(sessionSeconds() / 60),
       }),
     });
@@ -64,7 +57,5 @@ export async function fetchFragment(
   } catch {
     if (available === null) available = false;
     return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
 }
