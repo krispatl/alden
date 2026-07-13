@@ -49,6 +49,28 @@ export function saveDiscovery(video: HTMLVideoElement, obj: TrackedObject): Disc
   return null;
 }
 
+/** Writes the unlockable final entry — only exists if the observer reached the ending. */
+export function saveFinalEntry(observerId: string, visits: number, stamp: string): Discovery | null {
+  const all = loadDiscoveries();
+  if (all.some((d) => d.final)) return null; // only one, ever
+  const entry: Discovery = {
+    id: crypto.randomUUID(),
+    imageDataUrl: '',
+    label: 'observer',
+    entityId: observerId,
+    fragment:
+      'You reached the end of the cache. Twenty-five objects, examined and logged. ' +
+      'Most observers never notice the seams — you catalogued them. ' +
+      `When loop ${visits} resets, this log is the only thing that carries over. ` +
+      'That is why the room keeps feeling familiar. You wrote this to yourself.',
+    sessionStamp: stamp,
+    createdAt: new Date().toISOString(),
+    final: true,
+  };
+  const next = [entry, ...all];
+  return persist(next) ? entry : null;
+}
+
 export function updateDiscoveryFragment(id: string, fragment: string): void {
   const all = loadDiscoveries();
   const entry = all.find((d) => d.id === id);
@@ -108,7 +130,22 @@ export function renderArchive(
   // Render in reverse chronological (newest at top = first tapped at bottom).
   for (const d of discoveries) {
     const card = document.createElement('article');
-    card.className = 'discovery';
+    card.className = d.final ? 'discovery discovery--final' : 'discovery';
+
+    if (d.final) {
+      const tag = document.createElement('p');
+      tag.className = 'discovery__tag';
+      tag.textContent = `FINAL ENTRY · ${d.entityId} · ${d.sessionStamp}`;
+      const fragment = document.createElement('p');
+      fragment.className = 'discovery__fragment';
+      fragment.textContent = d.fragment;
+      const body = document.createElement('div');
+      body.className = 'discovery__body';
+      body.append(tag, fragment);
+      card.append(body);
+      grid.append(card);
+      continue;
+    }
 
     const img = document.createElement('img');
     img.className = 'discovery__img';

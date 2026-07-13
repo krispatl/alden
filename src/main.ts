@@ -14,12 +14,12 @@ import { HologramLayer } from './hologram';
 import { AudioEngine } from './audio';
 import {
   deleteDiscovery, discoveryCount, exportLogText, renderArchive,
-  saveDiscovery, updateDiscoveryFragment,
+  saveDiscovery, saveFinalEntry, updateDiscoveryFragment,
 } from './archive';
-import { aiStatus, fetchFragment } from './ai';
+import { aiStatus, cropObject, fetchFragment } from './ai';
 import {
   activationCount, ambientLine, categoryOf, generateFragment,
-  isEnded, noteActivation,
+  isEnded, noteActivation, resetLoop, sessionStamp,
 } from './narrative';
 import * as session from './session';
 import type { TrackedObject } from './types';
@@ -114,11 +114,34 @@ function updateCameraArc(): void {
 
 /* ----------------------------------------------------------- activation */
 
+const ACT_LINES: Record<number, { line: string; haptic: boolean }> = {
+  6: { line: 'The traces match yours', haptic: false },
+  11: { line: 'You have been here before', haptic: true },
+  18: { line: 'The cache is almost full', haptic: false },
+};
+
+function showActCard(line: string, haptic: boolean): void {
+  const card = $('actcard');
+  $('actcard-line').textContent = line;
+  card.hidden = false;
+  // restart the CSS animation
+  card.style.animation = 'none';
+  void card.offsetHeight;
+  card.style.animation = '';
+  audio.beat();
+  if (haptic && navigator.vibrate) navigator.vibrate([50, 90, 50]);
+  setTimeout(() => { card.hidden = true; }, 1650);
+}
+
 function activate(obj: TrackedObject): void {
   const isReactivation = obj.id === activeId;
   activeId = obj.id;
 
-  if (!isReactivation) obj.encounter = noteActivation(obj.label);
+  if (!isReactivation) {
+    obj.encounter = noteActivation(obj.label);
+    const boundary = ACT_LINES[activationCount()];
+    if (boundary) setTimeout(() => showActCard(boundary.line, boundary.haptic), 700);
+  }
   tracker.setFragment(obj.id, generateFragment(obj, tracker.labels()));
   audio.detect();
   updateCameraArc();
@@ -128,10 +151,13 @@ function activate(obj: TrackedObject): void {
   if (isEnded() && !endingTriggered) {
     endingTriggered = true;
     audio.fadeOut();
+    const s = session.load();
     setTimeout(() => {
       hudTicker.textContent = 'session complete';
-      showToast('The cache is full.');
-    }, 3000);
+      const final = saveFinalEntry(s.observerId, s.visits, sessionStamp());
+      if (final) { updateBadge(); showToast('A final entry appeared in your log.'); }
+      $('reset-btn').hidden = false;
+    }, 3500);
   }
 
   // Auto-log.
@@ -148,9 +174,11 @@ function activate(obj: TrackedObject): void {
     updateDiscoveryFragment(activeLogId, obj.fragment);
   }
 
-  // LLM narrator (one call per activation).
+  // LLM narrator (one call per activation). A small crop of the tapped
+  // object rides along so the narrator can cite real visual detail.
   const logId = activeLogId;
-  void fetchFragment(obj.label, obj.encounter, tracker.labels()).then((res) => {
+  const crop = cropObject(video, obj.bbox);
+  void fetchFragment(obj.label, obj.encounter, tracker.labels(), crop).then((res) => {
     if (!res) return;
     if (logId) updateDiscoveryFragment(logId, res.fragment);
     if (activeId === obj.id && tracker.get(obj.id)) {
@@ -359,6 +387,28 @@ $('archive-export').addEventListener('click', async () => {
   } catch {
     showToast('Could not export log');
   }
+});
+
+/* ------------------------------------------------------------ loop reset */
+
+$('reset-btn').addEventListener('click', () => {
+  const btn = $('reset-btn');
+  btn.hidden = true;
+  const flash = $('reset-flash');
+  audio.resetBurst(() => {
+    flash.classList.add('reset-flash--fire');
+    setTimeout(() => flash.classList.remove('reset-flash--fire'), 550);
+    // The loop restarts: story resets, log + observer persist, visits +1.
+    resetLoop();
+    deactivate();
+    endingTriggered = false;
+    const s = session.beginVisit();
+    hudObserver.textContent = `${s.observerId} · LOOP ${s.visits}`;
+    hudTicker.textContent = 'render reset · cache retained';
+    updateCameraArc();
+    audio.updateArc(0);
+    showToast(`Loop ${s.visits} begins.`);
+  });
 });
 
 /* ----------------------------------------------------------- lifecycle */

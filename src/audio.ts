@@ -127,6 +127,55 @@ export class AudioEngine {
     this.dissonanceGain?.gain.setTargetAtTime(activations >= 18 ? 0.018 : 0, t, 2);
   }
 
+  /** Deep sub thump — act transition punctuation. */
+  beat(): void {
+    this.play((t, out, ctx) => {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(55, t);
+      o.frequency.exponentialRampToValueAtTime(30, t + 0.35);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.14, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+      o.connect(g).connect(out);
+      o.start(t); o.stop(t + 0.5);
+    });
+  }
+
+  /** Loop reset: noise swell → hard cut → drone returns at Act I level. */
+  resetBurst(onCut?: () => void): void {
+    if (!this.ctx || !this.master) { onCut?.(); return; }
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    if (!this.muted) {
+      const len = Math.floor(ctx.sampleRate * 1.2);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const n = ctx.createBufferSource(); n.buffer = buf;
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.setValueAtTime(300, t);
+      f.frequency.exponentialRampToValueAtTime(6000, t + 1.1);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.09, t + 1.05);
+      g.gain.setValueAtTime(0.0001, t + 1.12); // hard cut
+      n.connect(f).connect(g).connect(this.master);
+      n.start(t);
+    }
+    setTimeout(() => {
+      // Drone returns at base level; act layers stay silent until updateArc.
+      const tc = ctx.currentTime;
+      this.droneGain?.gain.setTargetAtTime(0.04, tc, 0.8);
+      this.layer2Gain?.gain.setTargetAtTime(0, tc, 0.1);
+      this.heartGain?.gain.setTargetAtTime(0, tc, 0.1);
+      this.dissonanceGain?.gain.setTargetAtTime(0, tc, 0.1);
+      onCut?.();
+    }, 1150);
+  }
+
   /** Fade all drones to silence for the ending. */
   fadeOut(): void {
     if (!this.ctx) return;

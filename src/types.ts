@@ -33,6 +33,8 @@ export interface Discovery {
   /** Session-relative stamp, e.g. T+00:03:42. */
   sessionStamp: string;
   createdAt: string;
+  /** True for the unlockable final entry written at the ending. */
+  final?: boolean;
 }
 
 /** Maps a bbox from video coordinates to on-screen (CSS pixel) coordinates. */

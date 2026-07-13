@@ -31,6 +31,9 @@ VOICE RULES:
 - When a previous object is provided, you may reference the shift: "You turned from the cup. The chair was waiting."
 - PERSON detection: always eerie, regardless of act. "The other observer cannot see what you see." Never identify them as human — they are "another observer" or "another instance."
 
+VISION:
+If an image of the examined object is attached, weave ONE concrete visual detail into the fragment — its color, wear, contents, position, something printed on it. The detail must feel observed, not described. "The mug is chipped on the rim facing away from you. The render only repairs what you look at directly." Never mention that you received an image. Never describe the whole scene — one detail only.
+
 RETURNING VISITORS:
 If visit count > 1, the viewer has opened the app before. The loop is real. Reference it: "Session {visit}. The render remembers you."
 
@@ -50,7 +53,13 @@ function buildUser(body: any): string {
   ].filter(Boolean).join('\n');
 }
 
-async function callOpenAI(key: string, user: string): Promise<string> {
+async function callOpenAI(key: string, user: string, image?: string): Promise<string> {
+  const content: any = image
+    ? [
+        { type: 'text', text: user },
+        { type: 'image_url', image_url: { url: image, detail: 'low' } },
+      ]
+    : user;
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -60,7 +69,7 @@ async function callOpenAI(key: string, user: string): Promise<string> {
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: STORY_BIBLE },
-        { role: 'user', content: user },
+        { role: 'user', content },
       ],
     }),
   });
@@ -69,7 +78,12 @@ async function callOpenAI(key: string, user: string): Promise<string> {
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-async function callGemini(key: string, user: string): Promise<string> {
+async function callGemini(key: string, user: string, image?: string): Promise<string> {
+  const parts: any[] = [{ text: user }];
+  if (image) {
+    const [, meta, b64] = image.match(/^data:(image\/\w+);base64,(.+)$/) ?? [];
+    if (b64) parts.push({ inlineData: { mimeType: meta, data: b64 } });
+  }
   const r = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
     {
@@ -77,7 +91,7 @@ async function callGemini(key: string, user: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: STORY_BIBLE }] },
-        contents: [{ role: 'user', parts: [{ text: user }] }],
+        contents: [{ role: 'user', parts }],
         generationConfig: { maxOutputTokens: 120, responseMimeType: 'application/json' },
       }),
     }
@@ -87,7 +101,17 @@ async function callGemini(key: string, user: string): Promise<string> {
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 }
 
-async function callAnthropic(key: string, user: string): Promise<string> {
+async function callAnthropic(key: string, user: string, image?: string): Promise<string> {
+  let content: any = user;
+  if (image) {
+    const [, meta, b64] = image.match(/^data:(image\/\w+);base64,(.+)$/) ?? [];
+    if (b64) {
+      content = [
+        { type: 'image', source: { type: 'base64', media_type: meta, data: b64 } },
+        { type: 'text', text: user },
+      ];
+    }
+  }
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -99,7 +123,7 @@ async function callAnthropic(key: string, user: string): Promise<string> {
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 120,
       system: STORY_BIBLE,
-      messages: [{ role: 'user', content: user }],
+      messages: [{ role: 'user', content }],
     }),
   });
   if (!r.ok) throw new Error(`anthropic ${r.status}`);
@@ -114,14 +138,24 @@ export default async function handler(req: any, res: any) {
     res.status(400).json({ error: 'label required' }); return;
   }
   const user = buildUser(req.body);
+  // Vision: accept a small JPEG/PNG data URL crop (cap ~500KB to be safe).
+  let image: string | undefined;
+  const rawImage = req.body?.image;
+  if (
+    typeof rawImage === 'string' &&
+    /^data:image\/(jpeg|png|webp);base64,/.test(rawImage) &&
+    rawImage.length < 500_000
+  ) {
+    image = rawImage;
+  }
   const openai = process.env.OPENAI_API_KEY;
   const gemini = process.env.GEMINI_API_KEY;
   const anthropic = process.env.ANTHROPIC_API_KEY;
   try {
     let text: string;
-    if (openai) text = await callOpenAI(openai, user);
-    else if (gemini) text = await callGemini(gemini, user);
-    else if (anthropic) text = await callAnthropic(anthropic, user);
+    if (openai) text = await callOpenAI(openai, user, image);
+    else if (gemini) text = await callGemini(gemini, user, image);
+    else if (anthropic) text = await callAnthropic(anthropic, user, image);
     else { res.status(500).json({ error: 'no key' }); return; }
     const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
     if (typeof parsed.fragment !== 'string') throw new Error('bad shape');

@@ -31,7 +31,9 @@
           <span class="btn--enter__label">Begin observation</span>
         </button>
         <p class="landing__privacy fade-in fd5">
-          All processing happens on your device.<br />No images leave your phone.
+          Object detection runs entirely on your device.<br />
+          With the live narrator enabled, only a small crop of a tapped<br />
+          object is analyzed — never the full frame, never without a tap.
         </p>
       </div>
     </section>
@@ -80,6 +82,17 @@
         </div>
         <span class="hud__hint">tap to examine · hold to inspect</span>
       </footer>
+
+      <!-- Act transition title card -->
+      <div id="actcard" class="actcard" hidden>
+        <p id="actcard-line" class="actcard__line"></p>
+      </div>
+
+      <!-- Loop reset (appears after the ending) -->
+      <button id="reset-btn" class="btn btn--reset" hidden>Reset the loop</button>
+
+      <!-- Reset flash -->
+      <div id="reset-flash" class="reset-flash" aria-hidden="true"></div>
 
       <!-- Onboarding -->
       <div id="onboarding" class="onboard" hidden>

@@ -39,6 +39,15 @@ npm run build
 
 Deploy `dist/` to Vercel / Netlify / Cloudflare Pages. Fully self-contained.
 
+## Vision narrator (optional)
+
+When the LLM narrator is active, each tap also sends a **small crop of the
+tapped object only** (max 320px, ~20–40KB) so the narrator can cite one real
+visual detail — the chip on the mug, the sticker on the laptop. Never the
+full frame, never without a tap. To make the narrator text-only, set
+`SEND_VISION = false` in `src/ai.ts`. All three providers (gpt-4o-mini,
+gemini-2.0-flash, claude haiku) handle the image path.
+
 ## LLM narrator (optional)
 
 Set one env var on Vercel — `OPENAI_API_KEY` (gpt-4o-mini),

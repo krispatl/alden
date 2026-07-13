@@ -87,6 +87,15 @@ export function isEnded(): boolean {
   return state.ended;
 }
 
+/** Resets the in-session story (the loop restarts). Log + lifetime persist. */
+export function resetLoop(): void {
+  state.perLabel.clear();
+  state.activations = 0;
+  state.prevLabel = null;
+  state.ended = false;
+  state.sessionStart = performance.now();
+}
+
 export function sessionSeconds(): number {
   return Math.floor((performance.now() - state.sessionStart) / 1000);
 }
